@@ -1,0 +1,14 @@
+create extension if not exists pgcrypto;
+create type user_role as enum ('admin','manager','agent');
+create type customer_stage as enum ('신규','상담중','텔레그램','거래소가입','입금','활성회원','휴면','종료');
+create table profiles(id uuid primary key references auth.users(id) on delete cascade,email text,display_name text,role user_role not null default 'agent',active boolean default true,created_at timestamptz default now());
+create table customers(id uuid primary key default gen_random_uuid(),first_inbound_date date,sensitivity text check(sensitivity in ('상','중','하','폐')),db_type text,inbound_content text,name text,telegram_joined boolean,phone text,exchange_joined boolean,exchange_name text,consultation_notes text,stage customer_stage default '신규',owner_id uuid references profiles(id),next_contact_at timestamptz,created_by uuid references profiles(id),created_at timestamptz default now(),updated_at timestamptz default now());
+create table customer_activities(id uuid primary key default gen_random_uuid(),customer_id uuid references customers(id) on delete cascade,activity_type text,content text,created_by uuid references profiles(id),created_at timestamptz default now());
+create table ip_allowlist(id uuid primary key default gen_random_uuid(),user_id uuid references profiles(id) on delete cascade,ip_address inet,label text,status text check(status in ('pending','approved','blocked')) default 'pending',approved_by uuid references profiles(id),approved_at timestamptz,last_seen_at timestamptz,unique(user_id,ip_address));
+create table login_audit(id bigserial primary key,user_id uuid references profiles(id),ip_address inet,user_agent text,result text,created_at timestamptz default now());
+create table change_logs(id bigserial primary key,table_name text,record_id uuid,action text,old_data jsonb,new_data jsonb,changed_by uuid references profiles(id),created_at timestamptz default now());
+alter table profiles enable row level security; alter table customers enable row level security; alter table customer_activities enable row level security; alter table ip_allowlist enable row level security; alter table login_audit enable row level security;
+create policy "active users read customers" on customers for select using (exists(select 1 from profiles p where p.id=auth.uid() and p.active));
+create policy "agents insert customers" on customers for insert with check (auth.uid()=created_by);
+create policy "owner or managers update" on customers for update using (owner_id=auth.uid() or exists(select 1 from profiles p where p.id=auth.uid() and p.role in ('admin','manager')));
+create policy "admins delete customers" on customers for delete using (exists(select 1 from profiles p where p.id=auth.uid() and p.role='admin'));

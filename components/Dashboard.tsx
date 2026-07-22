@@ -1,0 +1,151 @@
+'use client';
+import {useEffect,useMemo,useState} from 'react';
+import type {ConsultationEntry,Customer,IpRule,PendingAccess,Sensitivity,StaffMember,StaffRole,Stage} from '@/lib/types';
+import {hashPassword} from '@/lib/auth';
+
+const STORAGE_KEY='botrader-crm-customers-final-v1';
+const OLD_KEYS=['botrader-crm-customers-v4','botrader-crm-customers-v3','botrader-crm-customers-v2'];
+const STAFF_KEY='botrader-crm-staff-final-v1';
+const SECURITY_KEY='botrader-crm-security-final-v1';
+const stages:Stage[]=['신규','상담중','텔레그램','거래소가입','입금','활성회원','휴면','종료'];
+const grades:Sensitivity[]=['상','중','하','폐'];
+const roles:StaffRole[]=['최고관리자','관리자','일반담당자'];
+
+function localDate(d=new Date()){const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`}
+function addDays(date:string,days:number){const d=new Date(`${date}T12:00:00`);d.setDate(d.getDate()+days);return localDate(d)}
+function today(){return localDate()}
+function yesterday(){return addDays(today(),-1)}
+function tomorrow(){return addDays(today(),1)}
+function uid(){return typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`}
+function normalizeCustomer(raw:any):Customer{
+ const history:Array<ConsultationEntry>=Array.isArray(raw.consultation_history)?raw.consultation_history.filter((x:any)=>x&&x.content).map((x:any)=>({id:x.id||uid(),date:x.date||raw.first_inbound_date||today(),content:String(x.content),created_at:x.created_at||new Date().toISOString()})):[];
+ if(!history.length&&raw.consultation_notes){history.push({id:uid(),date:raw.first_inbound_date||today(),content:String(raw.consultation_notes),created_at:raw.updated_at||new Date().toISOString()});}
+ return {...raw,id:raw.id||uid(),first_inbound_date:raw.first_inbound_date||today(),sensitivity:grades.includes(raw.sensitivity)?raw.sensitivity:'중',db_type:raw.db_type||'',inbound_content:raw.inbound_content||'',name:raw.name||'',phone:raw.phone||'',telegram_alias:raw.telegram_alias||'',telegram_joined:!!raw.telegram_joined,exchange_joined:!!raw.exchange_joined,exchange_name:raw.exchange_name||'',deposited:raw.deposited??(['입금','활성회원'].includes(raw.stage)),consultation_notes:history.map(x=>x.content).join('\n'),consultation_history:history,stage:stages.includes(raw.stage)?raw.stage:'신규',owner_name:raw.owner_name||'',next_contact_at:raw.next_contact_at||null,updated_at:raw.updated_at||new Date().toISOString()};
+}
+function blankCustomer():Customer{return normalizeCustomer({id:uid(),first_inbound_date:today(),sensitivity:'중',db_type:'개인텔',inbound_content:'',name:'',phone:'',telegram_alias:'',telegram_joined:false,exchange_joined:false,exchange_name:'',deposited:false,consultation_notes:'',consultation_history:[],stage:'신규',owner_name:'',next_contact_at:null,updated_at:new Date().toISOString()});}
+function fmtDate(value:string){if(!value)return '-';const d=new Date(value+'T00:00:00');if(Number.isNaN(d.getTime()))return value;return `${d.getMonth()+1}/${d.getDate()}`}
+
+const defaultStaff:StaffMember[]=[{id:'owner-root',name:'대표',role:'최고관리자',active:true,username:'',passwordHash:''}];
+const defaultSecurity={mode:'승인된 IP만',koreaOnly:false,rules:[] as IpRule[],pending:[] as PendingAccess[]};
+
+export default function Dashboard({initial,authenticatedUserId,onLogout}:{initial:Customer[],authenticatedUserId:string,onLogout:()=>void}){
+ const normalizedInitial=useMemo(()=>initial.map(normalizeCustomer),[initial]);
+ const [customers,setCustomers]=useState<Customer[]>(normalizedInitial);
+ const [staff,setStaff]=useState<StaffMember[]>(defaultStaff);
+ const currentUserId=authenticatedUserId;
+ const [security,setSecurity]=useState(defaultSecurity);
+ const [loaded,setLoaded]=useState(false);
+ const [q,setQ]=useState(''); const [grade,setGrade]=useState('전체'); const [dbType,setDbType]=useState('전체');
+ const [selectedId,setSelectedId]=useState<string|null>(null);
+ const [editing,setEditing]=useState<Customer|null>(null);
+ const [showStaff,setShowStaff]=useState(false);
+ const [showDue,setShowDue]=useState(false);
+ const [showTomorrow,setShowTomorrow]=useState(false);
+ const [showSecurity,setShowSecurity]=useState(false);
+
+ useEffect(()=>{try{let saved=localStorage.getItem(STORAGE_KEY);if(!saved){for(const key of OLD_KEYS){saved=localStorage.getItem(key);if(saved)break;}}if(saved){const parsed=JSON.parse(saved);if(Array.isArray(parsed))setCustomers(parsed.map(normalizeCustomer));}
+  const savedStaff=JSON.parse(localStorage.getItem(STAFF_KEY)||'null');if(Array.isArray(savedStaff)&&savedStaff.length)setStaff(savedStaff);
+  const savedSecurity=JSON.parse(localStorage.getItem(SECURITY_KEY)||'null');if(savedSecurity)setSecurity({...defaultSecurity,...savedSecurity});
+ }catch{}setLoaded(true)},[]);
+ useEffect(()=>{if(loaded)localStorage.setItem(STORAGE_KEY,JSON.stringify(customers));},[customers,loaded]);
+ useEffect(()=>{if(loaded)localStorage.setItem(STAFF_KEY,JSON.stringify(staff));},[staff,loaded]);
+ useEffect(()=>{if(loaded)localStorage.setItem(SECURITY_KEY,JSON.stringify(security));},[security,loaded]);
+
+ const currentUser=staff.find(s=>s.id===currentUserId&&s.active)||staff.find(s=>s.role==='최고관리자')||defaultStaff[0];
+ const isAdmin=currentUser.role==='최고관리자'||currentUser.role==='관리자';
+ const scopedCustomers=useMemo(()=>isAdmin?customers:customers.filter(c=>c.owner_name===currentUser.name),[customers,currentUser.name,isAdmin]);
+ const selected=scopedCustomers.find(x=>x.id===selectedId)||null;
+ const dbTypes=useMemo(()=>Array.from(new Set(scopedCustomers.map(c=>c.db_type).filter(Boolean) as string[])).sort(),[scopedCustomers]);
+ const rows=useMemo(()=>scopedCustomers.filter(c=>{const t=[c.name,c.phone,c.telegram_alias,c.inbound_content,c.owner_name,...c.consultation_history.map(x=>x.content)].join(' ').toLowerCase();return t.includes(q.toLowerCase())&&(grade==='전체'||c.sensitivity===grade)&&(dbType==='전체'||c.db_type===dbType)}),[scopedCustomers,q,grade,dbType]);
+ const total=scopedCustomers.length;
+ const countConsulted=(date:string)=>scopedCustomers.filter(c=>c.consultation_history.some(x=>x.date===date)).length;
+ const yesterdayConsulted=countConsulted(yesterday());
+ const todayConsulted=countConsulted(today());
+ const tomorrowCustomers=useMemo(()=>scopedCustomers.filter(c=>c.next_contact_at===tomorrow()).sort((a,b)=>(a.owner_name||'').localeCompare(b.owner_name||'')),[scopedCustomers]);
+ const dueCustomers=useMemo(()=>scopedCustomers.filter(c=>c.next_contact_at&&c.next_contact_at<=today()).sort((a,b)=>(a.next_contact_at||'').localeCompare(b.next_contact_at||'')),[scopedCustomers]);
+ const assignableStaff=staff.filter(s=>s.active).map(s=>s.name);
+
+ function saveCustomer(c:Customer){const next=normalizeCustomer({...c,updated_at:new Date().toISOString()});setCustomers(prev=>prev.some(x=>x.id===next.id)?prev.map(x=>x.id===next.id?next:x):[next,...prev]);setEditing(null);setSelectedId(next.id);}
+ function addConsultation(customerId:string,date:string,content:string,remindIn3Days:boolean){if(!content.trim())return;const entry:ConsultationEntry={id:uid(),date:date||today(),content:content.trim(),created_at:new Date().toISOString()};setCustomers(prev=>prev.map(c=>c.id===customerId?normalizeCustomer({...c,consultation_history:[...c.consultation_history,entry],consultation_notes:[...c.consultation_history,entry].map(x=>x.content).join('\n'),next_contact_at:remindIn3Days?addDays(date||today(),3):c.next_contact_at,updated_at:new Date().toISOString()}):c));}
+ function deleteConsultation(customerId:string,entryId:string){if(!confirm('이 상담 기록을 삭제할까요?'))return;setCustomers(prev=>prev.map(c=>{if(c.id!==customerId)return c;const history=c.consultation_history.filter(x=>x.id!==entryId);return normalizeCustomer({...c,consultation_history:history,consultation_notes:history.map(x=>x.content).join('\n')});}));}
+ function archiveCustomer(id:string){if(!confirm('이 고객을 종료 상태로 변경할까요? 데이터는 삭제되지 않습니다.'))return;setCustomers(p=>p.map(x=>x.id===id?{...x,stage:'종료',updated_at:new Date().toISOString()}:x));setSelectedId(null);}
+ function hardDeleteCustomer(id:string){if(!isAdmin)return;if(!confirm('관리자 전용 완전 삭제입니다. 복구할 수 없습니다. 계속할까요?'))return;setCustomers(p=>p.filter(x=>x.id!==id));setSelectedId(null);}
+ function resetData(){if(confirm('입력·수정한 내용을 모두 지우고 최초 데이터로 되돌릴까요?')){setCustomers(normalizedInitial);localStorage.removeItem(STORAGE_KEY);for(const key of OLD_KEYS)localStorage.removeItem(key);}}
+ function download(){const blob=new Blob([JSON.stringify(customers,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='CRM_백업.json';a.click();URL.revokeObjectURL(a.href)}
+ function upload(e:React.ChangeEvent<HTMLInputElement>){const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const parsed=JSON.parse(String(r.result));if(!Array.isArray(parsed))throw new Error();setCustomers(parsed.map(normalizeCustomer));alert('백업 파일을 불러왔습니다.')}catch{alert('CRM_백업.json 파일을 확인해 주세요.')}};r.readAsText(f);e.target.value='';}
+
+ return <main className="wrap">
+  <div className="top"><div><div className="title">CRM <span className="version">로컬 안정화 v1.1 · 로그인 적용</span></div><div className="roleNotice">현재 사용자: <b>{currentUser.name}</b> · {currentUser.role}{!isAdmin&&' · 본인 담당 DB만 표시'}</div></div><div className="topActions">
+   {isAdmin&&<button onClick={()=>setShowStaff(true)}>사용자·관리자 관리</button>}{isAdmin&&<button onClick={()=>setShowSecurity(true)}>보안 관리</button>}<button onClick={onLogout}>로그아웃</button><button className="primary" onClick={()=>setEditing(blankCustomer())}>+ 신규 고객</button>
+  </div></div>
+  <section className="kpis"><div className="card kpi">전체 DB 수<strong>{total}</strong></div><div className="card kpi">전일 상담 수<strong>{yesterdayConsulted}</strong></div><div className="card kpi">오늘 상담 수<strong>{todayConsulted}</strong></div><button className="card kpi clickableKpi" onClick={()=>setShowTomorrow(true)}>내일 상담 예약<strong>{tomorrowCustomers.length}</strong><span>목록 보기</span></button></section>
+  <div className="dueBanner" onClick={()=>setShowDue(true)}><div><b>오늘 연락해야 할 고객</b><span>예정일이 오늘이거나 지난 고객을 확인합니다.</span></div><strong>{dueCustomers.length}명</strong></div>
+  <div className="toolbar"><input placeholder="이름·연락처·상담내용 검색" value={q} onChange={e=>setQ(e.target.value)} style={{minWidth:300}}/><select value={grade} onChange={e=>setGrade(e.target.value)}><option>전체</option>{grades.map(x=><option key={x}>{x}</option>)}</select><select value={dbType} onChange={e=>setDbType(e.target.value)}><option>전체</option>{dbTypes.map(x=><option key={x}>{x}</option>)}</select><label className="buttonLike">백업 불러오기<input hidden type="file" accept="application/json" onChange={upload}/></label><button onClick={download}>백업 다운로드</button>{isAdmin&&<button onClick={resetData}>초기화</button>}</div>
+  <div className="tableHint">열 제목의 오른쪽 가장자리를 드래그하면 폭을 넓히거나 줄일 수 있습니다.</div>
+  <div className="tableWrap"><table><thead><tr><ResizableTh label="최초 인입"/><ResizableTh label="감도"/><ResizableTh label="DB유형"/><ResizableTh label="DB유입메세지" wide/><ResizableTh label="이름/필명"/><ResizableTh label="연락처"/><ResizableTh label="텔레그램 필명"/><ResizableTh label="담당자"/><ResizableTh label="상담 횟수"/><ResizableTh label="상담내용" wide/></tr></thead><tbody>{rows.map(c=><tr key={c.id} className="clickable" onClick={()=>setSelectedId(c.id)}><td>{c.first_inbound_date||'-'}</td><td><span className={'badge '+({상:'high',중:'mid',하:'low',폐:'dead'}[c.sensitivity])}>{c.sensitivity}</span></td><td>{c.db_type||'-'}</td><td className="clipCell">{c.inbound_content||'-'}</td><td><b>{c.name||'-'}</b></td><td>{c.phone||'-'}</td><td>{c.telegram_alias||'-'}</td><td>{c.owner_name||'미배정'}</td><td><b>{c.consultation_history.length}회</b></td><td className="clipCell">{c.consultation_history.at(-1)?.content||'-'}</td></tr>)}</tbody></table></div>
+
+  {selected&&!editing&&<CustomerDetail customer={selected} isAdmin={isAdmin} onClose={()=>setSelectedId(null)} onEdit={()=>setEditing({...selected,consultation_history:[...selected.consultation_history]})} onArchive={()=>archiveCustomer(selected.id)} onHardDelete={()=>hardDeleteCustomer(selected.id)} onAdd={addConsultation} onDeleteEntry={deleteConsultation}/>} 
+  {editing&&<CustomerForm value={editing} owners={assignableStaff} onCancel={()=>setEditing(null)} onSave={saveCustomer}/>} 
+  {showStaff&&<StaffManager staff={staff} onChange={setStaff} onClose={()=>setShowStaff(false)}/>} 
+  {showDue&&<CustomerListModal title="오늘 연락해야 할 고객" subtitle="예정일이 오늘이거나 지난 고객입니다." customers={dueCustomers} onClose={()=>setShowDue(false)} onOpen={id=>{setShowDue(false);setSelectedId(id)}}/>}
+  {showTomorrow&&<CustomerListModal title="내일 상담 예약 고객" subtitle="다음 연락일이 내일로 지정된 고객입니다." customers={tomorrowCustomers} onClose={()=>setShowTomorrow(false)} onOpen={id=>{setShowTomorrow(false);setSelectedId(id)}}/>}
+  {showSecurity&&<SecurityManager value={security} onChange={setSecurity} onClose={()=>setShowSecurity(false)}/>} 
+ </main>
+}
+
+function ResizableTh({label,wide=false}:{label:string,wide?:boolean}){return <th className={wide?'wideTh':''}><div className="thResize">{label}</div></th>}
+
+function CustomerDetail({customer,isAdmin,onClose,onEdit,onArchive,onHardDelete,onAdd,onDeleteEntry}:{customer:Customer,isAdmin:boolean,onClose:()=>void,onEdit:()=>void,onArchive:()=>void,onHardDelete:()=>void,onAdd:(id:string,date:string,content:string,remindIn3Days:boolean)=>void,onDeleteEntry:(id:string,entryId:string)=>void}){
+ const [date,setDate]=useState(today());const [content,setContent]=useState('');const [remind,setRemind]=useState(true);
+ const sorted=[...customer.consultation_history].sort((a,b)=>a.date.localeCompare(b.date)||a.created_at.localeCompare(b.created_at));
+ return <div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><div className="modal detail"><div className="modalHead"><div><h2>{customer.name||'이름 없음'}</h2><div className="muted">{customer.phone||'연락처 없음'}{customer.telegram_alias?` · 텔레그램 ${customer.telegram_alias}`:''}</div></div><button onClick={onClose}>닫기</button></div>
+ <div className="detailGrid"><Info label="감도" value={customer.sensitivity}/><Info label="DB유형" value={customer.db_type}/><Info label="최초 인입" value={customer.first_inbound_date}/><Info label="담당자" value={customer.owner_name||'미배정'}/><Info label="텔레그램" value={customer.telegram_joined?'입장':'미입장'}/><Info label="가입" value={customer.exchange_joined?'완료':'미가입'}/><Info label="입금" value={customer.deposited?'완료':'미입금'}/><Info label="상담 횟수" value={`${customer.consultation_history.length}회`}/><Info label="다음 연락일" value={customer.next_contact_at||'미정'}/><Info label="상태" value={customer.stage}/></div>
+ <h3>DB유입메세지</h3><div className="noteBox pre">{customer.inbound_content||'-'}</div>
+ <div className="sectionTitle"><h3>상담 내용</h3><span className="muted">메모를 남길 때마다 날짜별로 저장됩니다.</span></div>
+ <div className="addMemo"><input type="date" value={date} onChange={e=>setDate(e.target.value)}/><textarea rows={3} placeholder="새 상담 내용을 입력하세요" value={content} onChange={e=>setContent(e.target.value)}/><button className="primary" onClick={()=>{if(!content.trim())return;onAdd(customer.id,date,content,remind);setContent('');}}>상담 메모 추가</button></div>
+ <label className="remindCheck"><input type="checkbox" checked={remind} onChange={e=>setRemind(e.target.checked)}/> 메모 저장 후 3일 뒤 다시 연락 알림</label>
+ <div className="timeline">{sorted.length?sorted.map(entry=><div className="timelineRow" key={entry.id}><div className="timelineDate">{fmtDate(entry.date)}</div><div className="timelineContent">{entry.content}</div><button className="entryDelete" title="상담 기록 삭제" onClick={()=>onDeleteEntry(customer.id,entry.id)}>삭제</button></div>):<div className="empty">등록된 상담 기록이 없습니다.</div>}</div>
+ <div className="modalActions"><button className="warning" onClick={onArchive}>종료 처리</button>{isAdmin&&<button className="danger" onClick={onHardDelete}>완전 삭제</button>}<button className="primary" onClick={onEdit}>정보 수정</button></div></div></div>
+}
+function Info({label,value}:{label:string,value:any}){return <div className="info"><span>{label}</span><b>{value||'-'}</b></div>}
+function CustomerForm({value,owners,onCancel,onSave}:{value:Customer,owners:string[],onCancel:()=>void,onSave:(c:Customer)=>void}){
+ const [c,setC]=useState<Customer>(value);const set=(k:keyof Customer,v:any)=>setC(p=>({...p,[k]:v}));
+ return <div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)onCancel()}}><form className="modal" onSubmit={e=>{e.preventDefault();onSave(c)}}><div className="modalHead"><h2>{value.name?'고객 정보 수정':'신규 고객 등록'}</h2><button type="button" onClick={onCancel}>닫기</button></div><div className="formGrid">
+ <label>이름/필명<input required value={c.name||''} onChange={e=>set('name',e.target.value)}/></label><label>연락처<input value={c.phone||''} onChange={e=>set('phone',e.target.value)}/></label><label>텔레그램 필명<input value={c.telegram_alias||''} onChange={e=>set('telegram_alias',e.target.value)}/></label><label>최초 인입일<input type="date" value={c.first_inbound_date||''} onChange={e=>set('first_inbound_date',e.target.value)}/></label><label>DB유형<input value={c.db_type||''} onChange={e=>set('db_type',e.target.value)}/></label><label>감도<select value={c.sensitivity} onChange={e=>set('sensitivity',e.target.value)}>{grades.map(x=><option key={x}>{x}</option>)}</select></label><label>담당자<select value={c.owner_name||''} onChange={e=>set('owner_name',e.target.value)}><option value="">미배정</option>{owners.map(x=><option key={x}>{x}</option>)}</select></label><label>다음 연락일<input type="date" value={c.next_contact_at||''} onChange={e=>set('next_contact_at',e.target.value||null)}/></label><label>상태<select value={c.stage} onChange={e=>set('stage',e.target.value)}>{stages.map(x=><option key={x}>{x}</option>)}</select></label>
+ <label className="check"><input type="checkbox" checked={!!c.telegram_joined} onChange={e=>set('telegram_joined',e.target.checked)}/> 텔레그램 입장</label><label className="check"><input type="checkbox" checked={!!c.exchange_joined} onChange={e=>set('exchange_joined',e.target.checked)}/> 가입</label><label className="check"><input type="checkbox" checked={!!c.deposited} onChange={e=>set('deposited',e.target.checked)}/> 입금</label><label className="wide">DB유입메세지<textarea rows={4} value={c.inbound_content||''} onChange={e=>set('inbound_content',e.target.value)}/></label>
+ </div><div className="modalActions"><button type="button" onClick={onCancel}>취소</button><button className="primary" type="submit">저장</button></div></form></div>
+}
+function StaffManager({staff,onChange,onClose}:{staff:StaffMember[],onChange:(v:StaffMember[])=>void,onClose:()=>void}){
+ const [name,setName]=useState('');const [username,setUsername]=useState('');const [password,setPassword]=useState('');const [role,setRole]=useState<StaffRole>('일반담당자');
+ async function add(){
+  const n=name.trim(),u=username.trim();
+  if(!n||!u||!password){alert('이름, 아이디, 비밀번호를 모두 입력해 주세요.');return;}
+  if(u.length<4){alert('아이디는 4자 이상이어야 합니다.');return;}
+  if(password.length<8){alert('비밀번호는 8자 이상이어야 합니다.');return;}
+  if(staff.some(s=>s.username===u)){alert('이미 사용 중인 아이디입니다.');return;}
+  const passwordHash=await hashPassword(password);
+  onChange([...staff,{id:uid(),name:n,username:u,passwordHash,role,active:true}]);setName('');setUsername('');setPassword('');setRole('일반담당자');
+ }
+ function remove(id:string){const s=staff.find(x=>x.id===id);if(!s||s.role==='최고관리자')return;if(!confirm(`${s.name} 계정을 비활성화할까요?`))return;onChange(staff.map(x=>x.id===id?{...x,active:false}:x));}
+ async function resetPassword(id:string){const next=prompt('새 비밀번호를 입력하세요. (8자 이상)');if(!next)return;if(next.length<8){alert('비밀번호는 8자 이상이어야 합니다.');return;}const passwordHash=await hashPassword(next);onChange(staff.map(x=>x.id===id?{...x,passwordHash}:x));alert('비밀번호가 변경되었습니다.');}
+ return <div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><div className="modal"><div className="modalHead"><div><h2>사용자·관리자 관리</h2><div className="muted">사용자별 아이디·비밀번호와 권한을 등록합니다.</div></div><button onClick={onClose}>닫기</button></div>
+ <div className="staffAdd staffAddAuth"><input placeholder="이름" value={name} onChange={e=>setName(e.target.value)}/><input placeholder="로그인 아이디" value={username} onChange={e=>setUsername(e.target.value)}/><input type="password" placeholder="비밀번호 8자 이상" value={password} onChange={e=>setPassword(e.target.value)}/><select value={role} onChange={e=>setRole(e.target.value as StaffRole)}>{roles.filter(x=>x!=='최고관리자').map(x=><option key={x}>{x}</option>)}</select><button className="primary" onClick={add}>계정 추가</button></div>
+ <div className="ownerList">{staff.map(s=><div className="ownerRow" key={s.id}><div><b>{s.name}</b><span className="staffRole">아이디: {s.username||'미설정'} · {s.role}{!s.active?' · 비활성':''}</span></div><div className="accountActions">{s.active&&<button onClick={()=>resetPassword(s.id)}>비밀번호 변경</button>}{s.role!=='최고관리자'&&s.active&&<button className="entryDelete" onClick={()=>remove(s.id)}>비활성화</button>}</div></div>)}</div>
+ <div className="notice">비밀번호 원문은 표시하지 않고 해시값으로 저장합니다. 현재 로컬 버전에서는 이 컴퓨터 브라우저 안에 저장되므로 온라인 서비스 수준의 보안은 아닙니다.</div>
+ </div></div>
+}
+function CustomerListModal({title,subtitle,customers,onClose,onOpen}:{title:string,subtitle:string,customers:Customer[],onClose:()=>void,onOpen:(id:string)=>void}){
+ return <div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><div className="modal"><div className="modalHead"><div><h2>{title}</h2><div className="muted">{subtitle}</div></div><button onClick={onClose}>닫기</button></div><div className="dueList">{customers.length?customers.map(c=><button className="dueRow" key={c.id} onClick={()=>onOpen(c.id)}><div><b>{c.name||'이름 없음'}</b><span>{c.owner_name||'미배정'} · 감도 {c.sensitivity} · 상담 {c.consultation_history.length}회</span></div><div className="dueDate">{c.next_contact_at===today()?'오늘':c.next_contact_at===tomorrow()?'내일':`${fmtDate(c.next_contact_at||'')} 예정`}</div></button>):<div className="empty">대상 고객이 없습니다.</div>}</div></div></div>
+}
+function SecurityManager({value,onChange,onClose}:{value:any,onChange:(v:any)=>void,onClose:()=>void}){
+ const [ip,setIp]=useState('');const [label,setLabel]=useState('');const [type,setType]=useState<'화이트리스트'|'블랙리스트'>('화이트리스트');
+ function addRule(){if(!ip.trim())return;onChange({...value,rules:[...value.rules,{id:uid(),ip:ip.trim(),label:label.trim(),type,created_at:new Date().toISOString()}]});setIp('');setLabel('');}
+ function removeRule(id:string){onChange({...value,rules:value.rules.filter((r:IpRule)=>r.id!==id)});}
+ return <div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><div className="modal"><div className="modalHead"><div><h2>보안 관리</h2><div className="muted">화이트리스트·블랙리스트·접속 정책을 관리합니다.</div></div><button onClick={onClose}>닫기</button></div>
+  <div className="notice securityNotice"><b>현재는 로컬 버전입니다.</b><br/>아래 설정은 저장되지만 실제 IP 차단은 온라인 공동사용 버전으로 배포한 뒤 서버에서 적용됩니다.</div>
+  <div className="securityPolicy"><label>접속 제한 수준<select value={value.mode} onChange={e=>onChange({...value,mode:e.target.value})}><option>아무데서나 접속 가능</option><option>승인된 계정만</option><option>승인된 IP만</option><option>승인된 IP + 승인된 기기</option></select></label><label className="check"><input type="checkbox" checked={!!value.koreaOnly} onChange={e=>onChange({...value,koreaOnly:e.target.checked})}/> 한국에서만 접속 허용</label></div>
+  <h3>IP 규칙 추가</h3><div className="securityAdd"><input placeholder="예: 123.45.67.89" value={ip} onChange={e=>setIp(e.target.value)}/><input placeholder="예: 강남 사무실" value={label} onChange={e=>setLabel(e.target.value)}/><select value={type} onChange={e=>setType(e.target.value as any)}><option>화이트리스트</option><option>블랙리스트</option></select><button className="primary" onClick={addRule}>추가</button></div>
+  <div className="securityGrid"><div><h3>화이트리스트</h3>{value.rules.filter((r:IpRule)=>r.type==='화이트리스트').map((r:IpRule)=><div className="ruleRow" key={r.id}><div><b>{r.ip}</b><span>{r.label||'설명 없음'}</span></div><button onClick={()=>removeRule(r.id)}>삭제</button></div>)}{!value.rules.some((r:IpRule)=>r.type==='화이트리스트')&&<div className="empty">등록된 IP가 없습니다.</div>}</div><div><h3>블랙리스트</h3>{value.rules.filter((r:IpRule)=>r.type==='블랙리스트').map((r:IpRule)=><div className="ruleRow" key={r.id}><div><b>{r.ip}</b><span>{r.label||'설명 없음'}</span></div><button onClick={()=>removeRule(r.id)}>해제</button></div>)}{!value.rules.some((r:IpRule)=>r.type==='블랙리스트')&&<div className="empty">차단된 IP가 없습니다.</div>}</div></div>
+  <h3>승인 대기</h3><div className="empty">온라인 배포 후 새로운 IP의 접속 요청이 이곳에 표시됩니다.</div>
+ </div></div>
+}
