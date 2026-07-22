@@ -1,4 +1,13 @@
 import AuthApp from '@/components/AuthApp';
-import seed from '@/data/customers.json';
-import type {Customer} from '@/lib/types';
-export default function Page(){return <AuthApp initial={seed as Customer[]}/>}
+import { createClient } from '@/lib/supabase';
+
+export default async function Page() {
+  const supabase = createClient();
+
+  const { data } = await supabase
+    .from('customers')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  return <AuthApp initial={(data ?? []) as any} />;
+}

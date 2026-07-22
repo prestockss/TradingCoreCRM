@@ -2,6 +2,7 @@
 import {useEffect,useMemo,useState} from 'react';
 import type {ConsultationEntry,Customer,IpRule,PendingAccess,Sensitivity,StaffMember,StaffRole,Stage} from '@/lib/types';
 import {hashPassword} from '@/lib/auth';
+import {createClient} from '@/lib/supabase';
 
 const STORAGE_KEY='botrader-crm-customers-final-v1';
 const OLD_KEYS=['botrader-crm-customers-v4','botrader-crm-customers-v3','botrader-crm-customers-v2'];
@@ -20,7 +21,7 @@ function uid(){return typeof crypto!=='undefined'&&crypto.randomUUID?crypto.rand
 function normalizeCustomer(raw:any):Customer{
  const history:Array<ConsultationEntry>=Array.isArray(raw.consultation_history)?raw.consultation_history.filter((x:any)=>x&&x.content).map((x:any)=>({id:x.id||uid(),date:x.date||raw.first_inbound_date||today(),content:String(x.content),created_at:x.created_at||new Date().toISOString()})):[];
  if(!history.length&&raw.consultation_notes){history.push({id:uid(),date:raw.first_inbound_date||today(),content:String(raw.consultation_notes),created_at:raw.updated_at||new Date().toISOString()});}
- return {...raw,id:raw.id||uid(),first_inbound_date:raw.first_inbound_date||today(),sensitivity:grades.includes(raw.sensitivity)?raw.sensitivity:'중',db_type:raw.db_type||'',inbound_content:raw.inbound_content||'',name:raw.name||'',phone:raw.phone||'',telegram_alias:raw.telegram_alias||'',telegram_joined:!!raw.telegram_joined,exchange_joined:!!raw.exchange_joined,exchange_name:raw.exchange_name||'',deposited:raw.deposited??(['입금','활성회원'].includes(raw.stage)),consultation_notes:history.map(x=>x.content).join('\n'),consultation_history:history,stage:stages.includes(raw.stage)?raw.stage:'신규',owner_name:raw.owner_name||'',next_contact_at:raw.next_contact_at||null,updated_at:raw.updated_at||new Date().toISOString()};
+ return {...raw,id:raw.id||uid(),first_inbound_date:raw.first_inbound_date||today(),sensitivity:grades.includes(raw.sensitivity)?raw.sensitivity:'중',db_type:raw.db_type||'',inbound_content:raw.inbound_content??raw.inbound_message??'',name:raw.name||'',phone:raw.phone||'',telegram_alias:raw.telegram_alias??raw.telegram_name??'',telegram_joined:!!raw.telegram_joined,exchange_joined:!!raw.exchange_joined,exchange_name:raw.exchange_name||'',deposited:raw.deposited??raw.deposit_completed??(['입금','활성회원'].includes(raw.stage)),consultation_notes:history.map(x=>x.content).join('\n'),consultation_history:history,stage:stages.includes(raw.stage)?raw.stage:'신규',owner_name:raw.owner_name||'',next_contact_at:raw.next_contact_at||null,updated_at:raw.updated_at||new Date().toISOString()};
 }
 function blankCustomer():Customer{return normalizeCustomer({id:uid(),first_inbound_date:today(),sensitivity:'중',db_type:'개인텔',inbound_content:'',name:'',phone:'',telegram_alias:'',telegram_joined:false,exchange_joined:false,exchange_name:'',deposited:false,consultation_notes:'',consultation_history:[],stage:'신규',owner_name:'',next_contact_at:null,updated_at:new Date().toISOString()});}
 function fmtDate(value:string){if(!value)return '-';const d=new Date(value+'T00:00:00');if(Number.isNaN(d.getTime()))return value;return `${d.getMonth()+1}/${d.getDate()}`}
@@ -29,6 +30,9 @@ const defaultStaff:StaffMember[]=[{id:'owner-root',name:'대표',role:'최고관
 const defaultSecurity={mode:'승인된 IP만',koreaOnly:false,rules:[] as IpRule[],pending:[] as PendingAccess[]};
 
 export default function Dashboard({initial,authenticatedUserId,onLogout}:{initial:Customer[],authenticatedUserId:string,onLogout:()=>void}){
+
+ const supabase=useMemo(()=>createClient(),[]);
+
  const normalizedInitial=useMemo(()=>initial.map(normalizeCustomer),[initial]);
  const [customers,setCustomers]=useState<Customer[]>(normalizedInitial);
  const [staff,setStaff]=useState<StaffMember[]>(defaultStaff);
@@ -42,14 +46,43 @@ export default function Dashboard({initial,authenticatedUserId,onLogout}:{initia
  const [showDue,setShowDue]=useState(false);
  const [showTomorrow,setShowTomorrow]=useState(false);
  const [showSecurity,setShowSecurity]=useState(false);
+ const [importing,setImporting]=useState(false);
 
- useEffect(()=>{try{let saved=localStorage.getItem(STORAGE_KEY);if(!saved){for(const key of OLD_KEYS){saved=localStorage.getItem(key);if(saved)break;}}if(saved){const parsed=JSON.parse(saved);if(Array.isArray(parsed))setCustomers(parsed.map(normalizeCustomer));}
-  const savedStaff=JSON.parse(localStorage.getItem(STAFF_KEY)||'null');if(Array.isArray(savedStaff)&&savedStaff.length)setStaff(savedStaff);
-  const savedSecurity=JSON.parse(localStorage.getItem(SECURITY_KEY)||'null');if(savedSecurity)setSecurity({...defaultSecurity,...savedSecurity});
- }catch{}setLoaded(true)},[]);
- useEffect(()=>{if(loaded)localStorage.setItem(STORAGE_KEY,JSON.stringify(customers));},[customers,loaded]);
- useEffect(()=>{if(loaded)localStorage.setItem(STAFF_KEY,JSON.stringify(staff));},[staff,loaded]);
- useEffect(()=>{if(loaded)localStorage.setItem(SECURITY_KEY,JSON.stringify(security));},[security,loaded]);
+ useEffect(()=>{
+  async function load(){
+    const {data,error}=await supabase
+      .from('customers')
+      .select('*')
+      .order('created_at',{ascending:false});
+
+    if(error){
+      console.error(error);
+      setCustomers([]);
+    }else{
+      setCustomers((data||[]).map(normalizeCustomer));
+    }
+
+    try{
+      const savedStaff=JSON.parse(localStorage.getItem(STAFF_KEY)||'null');
+      if(Array.isArray(savedStaff)&&savedStaff.length)setStaff(savedStaff);
+
+      const savedSecurity=JSON.parse(localStorage.getItem(SECURITY_KEY)||'null');
+      if(savedSecurity)setSecurity({...defaultSecurity,...savedSecurity});
+    }catch{}
+
+    setLoaded(true);
+  }
+
+  load();
+},[supabase]);
+
+useEffect(()=>{
+  if(loaded)localStorage.setItem(STAFF_KEY,JSON.stringify(staff));
+},[staff,loaded]);
+
+useEffect(()=>{
+  if(loaded)localStorage.setItem(SECURITY_KEY,JSON.stringify(security));
+},[security,loaded]);
 
  const currentUser=staff.find(s=>s.id===currentUserId&&s.active)||staff.find(s=>s.role==='최고관리자')||defaultStaff[0];
  const isAdmin=currentUser.role==='최고관리자'||currentUser.role==='관리자';
@@ -74,13 +107,73 @@ export default function Dashboard({initial,authenticatedUserId,onLogout}:{initia
  function download(){const blob=new Blob([JSON.stringify(customers,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='CRM_백업.json';a.click();URL.revokeObjectURL(a.href)}
  function upload(e:React.ChangeEvent<HTMLInputElement>){const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const parsed=JSON.parse(String(r.result));if(!Array.isArray(parsed))throw new Error();setCustomers(parsed.map(normalizeCustomer));alert('백업 파일을 불러왔습니다.')}catch{alert('CRM_백업.json 파일을 확인해 주세요.')}};r.readAsText(f);e.target.value='';}
 
+ async function importCustomersToSupabase(e:React.ChangeEvent<HTMLInputElement>){
+  const file=e.target.files?.[0];
+  e.target.value='';
+  if(!file)return;
+  if(!confirm(`${file.name}의 고객 데이터를 Supabase에 등록할까요?`))return;
+
+  setImporting(true);
+  try{
+   const parsed=JSON.parse(await file.text());
+   if(!Array.isArray(parsed))throw new Error('JSON 최상위 형식이 배열이 아닙니다.');
+
+   const {data:{user},error:userError}=await supabase.auth.getUser();
+   if(userError||!user)throw new Error('로그인 사용자 정보를 확인할 수 없습니다. 다시 로그인해 주세요.');
+
+   const rows=parsed.map((raw:any,index:number)=>{
+    const customer=normalizeCustomer(raw);
+    return {
+     id:customer.id,
+     first_inbound_date:customer.first_inbound_date||null,
+     sensitivity:customer.sensitivity,
+     db_type:customer.db_type||null,
+     inbound_message:customer.inbound_content||null,
+     name:customer.name?.trim()||customer.phone?.trim()||`이름 미입력 ${index+1}`,
+     phone:customer.phone||null,
+     telegram_name:customer.telegram_alias||null,
+     telegram_joined:!!customer.telegram_joined,
+     exchange_joined:!!customer.exchange_joined,
+     exchange_name:customer.exchange_name||null,
+     deposit_completed:!!customer.deposited,
+     stage:customer.stage,
+     next_contact_at:customer.next_contact_at||null,
+     created_by:user.id,
+     updated_at:customer.updated_at||new Date().toISOString()
+    };
+   });
+
+   let uploaded=0;
+   for(let i=0;i<rows.length;i+=100){
+    const batch=rows.slice(i,i+100);
+    const {error}=await supabase.from('customers').upsert(batch,{onConflict:'id'});
+    if(error)throw error;
+    uploaded+=batch.length;
+   }
+
+   const {data,error}=await supabase
+    .from('customers')
+    .select('*')
+    .order('created_at',{ascending:false});
+
+   if(error)throw error;
+   setCustomers((data||[]).map(normalizeCustomer));
+   alert(`${uploaded}명 업로드 완료`);
+  }catch(error:any){
+   console.error(error);
+   alert(`업로드 실패: ${error?.message||'파일 또는 권한을 확인해 주세요.'}`);
+  }finally{
+   setImporting(false);
+  }
+ }
+
  return <main className="wrap">
   <div className="top"><div><div className="title">CRM <span className="version">로컬 안정화 v1.1 · 로그인 적용</span></div><div className="roleNotice">현재 사용자: <b>{currentUser.name}</b> · {currentUser.role}{!isAdmin&&' · 본인 담당 DB만 표시'}</div></div><div className="topActions">
    {isAdmin&&<button onClick={()=>setShowStaff(true)}>사용자·관리자 관리</button>}{isAdmin&&<button onClick={()=>setShowSecurity(true)}>보안 관리</button>}<button onClick={onLogout}>로그아웃</button><button className="primary" onClick={()=>setEditing(blankCustomer())}>+ 신규 고객</button>
   </div></div>
   <section className="kpis"><div className="card kpi">전체 DB 수<strong>{total}</strong></div><div className="card kpi">전일 상담 수<strong>{yesterdayConsulted}</strong></div><div className="card kpi">오늘 상담 수<strong>{todayConsulted}</strong></div><button className="card kpi clickableKpi" onClick={()=>setShowTomorrow(true)}>내일 상담 예약<strong>{tomorrowCustomers.length}</strong><span>목록 보기</span></button></section>
   <div className="dueBanner" onClick={()=>setShowDue(true)}><div><b>오늘 연락해야 할 고객</b><span>예정일이 오늘이거나 지난 고객을 확인합니다.</span></div><strong>{dueCustomers.length}명</strong></div>
-  <div className="toolbar"><input placeholder="이름·연락처·상담내용 검색" value={q} onChange={e=>setQ(e.target.value)} style={{minWidth:300}}/><select value={grade} onChange={e=>setGrade(e.target.value)}><option>전체</option>{grades.map(x=><option key={x}>{x}</option>)}</select><select value={dbType} onChange={e=>setDbType(e.target.value)}><option>전체</option>{dbTypes.map(x=><option key={x}>{x}</option>)}</select><label className="buttonLike">백업 불러오기<input hidden type="file" accept="application/json" onChange={upload}/></label><button onClick={download}>백업 다운로드</button>{isAdmin&&<button onClick={resetData}>초기화</button>}</div>
+  <div className="toolbar"><input placeholder="이름·연락처·상담내용 검색" value={q} onChange={e=>setQ(e.target.value)} style={{minWidth:300}}/><select value={grade} onChange={e=>setGrade(e.target.value)}><option>전체</option>{grades.map(x=><option key={x}>{x}</option>)}</select><select value={dbType} onChange={e=>setDbType(e.target.value)}><option>전체</option>{dbTypes.map(x=><option key={x}>{x}</option>)}</select><label className="buttonLike">백업 불러오기<input hidden type="file" accept="application/json" onChange={upload}/></label>{isAdmin&&<label className="buttonLike">{importing?'Supabase 업로드 중...':'기존 고객 Supabase 가져오기'}<input hidden type="file" accept="application/json" disabled={importing} onChange={importCustomersToSupabase}/></label>}<button onClick={download}>백업 다운로드</button>{isAdmin&&<button onClick={resetData}>초기화</button>}</div>
   <div className="tableHint">열 제목의 오른쪽 가장자리를 드래그하면 폭을 넓히거나 줄일 수 있습니다.</div>
   <div className="tableWrap"><table><thead><tr><ResizableTh label="최초 인입"/><ResizableTh label="감도"/><ResizableTh label="DB유형"/><ResizableTh label="DB유입메세지" wide/><ResizableTh label="이름/필명"/><ResizableTh label="연락처"/><ResizableTh label="텔레그램 필명"/><ResizableTh label="담당자"/><ResizableTh label="상담 횟수"/><ResizableTh label="상담내용" wide/></tr></thead><tbody>{rows.map(c=><tr key={c.id} className="clickable" onClick={()=>setSelectedId(c.id)}><td>{c.first_inbound_date||'-'}</td><td><span className={'badge '+({상:'high',중:'mid',하:'low',폐:'dead'}[c.sensitivity])}>{c.sensitivity}</span></td><td>{c.db_type||'-'}</td><td className="clipCell">{c.inbound_content||'-'}</td><td><b>{c.name||'-'}</b></td><td>{c.phone||'-'}</td><td>{c.telegram_alias||'-'}</td><td>{c.owner_name||'미배정'}</td><td><b>{c.consultation_history.length}회</b></td><td className="clipCell">{c.consultation_history.at(-1)?.content||'-'}</td></tr>)}</tbody></table></div>
 
