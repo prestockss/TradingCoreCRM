@@ -1,5 +1,6 @@
 import './globals.css';
 export const metadata={
+ metadataBase:new URL('https://trading-core-crm-v2.vercel.app'),
  title:'CRM',
  description:'CRM',
  openGraph:{title:'CRM',description:'CRM',type:'website'},
