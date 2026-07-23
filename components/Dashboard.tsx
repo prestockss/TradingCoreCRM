@@ -17,6 +17,14 @@ function columnValue(customer:Customer,key:ColumnKey){
  const value=customer[key as keyof Customer];
  return String(value||'-');
 }
+function normalizedPhone(value:string|null|undefined){return String(value||'').replace(/\D/g,'')}
+function normalizedName(value:string|null|undefined){return String(value||'').replace(/\s+/g,'').toLowerCase()}
+function sameCustomer(a:Customer,b:Customer){
+ const aPhone=normalizedPhone(a.phone),bPhone=normalizedPhone(b.phone);
+ if(aPhone&&bPhone&&aPhone===bPhone)return true;
+ const aName=normalizedName(a.name),bName=normalizedName(b.name);
+ return !!aName&&aName===bName&&dateOnly(a.first_inbound_date)===dateOnly(b.first_inbound_date);
+}
 
 function localDate(d=new Date()){const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`}
 function addDays(date:string,days:number){const d=new Date(`${date}T12:00:00`);d.setDate(d.getDate()+days);return localDate(d)}
@@ -363,7 +371,6 @@ useEffect(()=>{
   const file=e.target.files?.[0];
   e.target.value='';
   if(!file)return;
-  if(!confirm(`${file.name}의 고객 데이터를 Supabase에 등록할까요?`))return;
 
   setImporting(true);
   try{
@@ -373,8 +380,20 @@ useEffect(()=>{
    const {data:{user},error:userError}=await supabase.auth.getUser();
    if(userError||!user)throw new Error('로그인 사용자 정보를 확인할 수 없습니다. 다시 로그인해 주세요.');
 
+   const seenPhones=new Map<string,number>();
+   const seenNames=new Map<string,number>();
+   let updatedCount=0,newCount=0;
    const rows=parsed.map((raw:any,index:number)=>{
-    const customer=normalizeCustomer(raw);
+    const incoming=normalizeCustomer(raw);
+    const phoneKey=normalizedPhone(incoming.phone);
+    const nameKey=normalizedName(incoming.name)&&dateOnly(incoming.first_inbound_date)?`${normalizedName(incoming.name)}|${dateOnly(incoming.first_inbound_date)}`:'';
+    if(phoneKey&&seenPhones.has(phoneKey))throw new Error(`${index+1}번째와 ${seenPhones.get(phoneKey)}번째 고객의 마블링등급이 중복됩니다.`);
+    if(nameKey&&seenNames.has(nameKey))throw new Error(`${index+1}번째와 ${seenNames.get(nameKey)}번째 고객의 이름·인입일이 중복됩니다.`);
+    if(phoneKey)seenPhones.set(phoneKey,index+1);
+    if(nameKey)seenNames.set(nameKey,index+1);
+    const matched=customers.find(existing=>sameCustomer(existing,incoming));
+    if(matched)updatedCount+=1;else newCount+=1;
+    const customer=normalizeCustomer({...raw,id:matched?.id||raw.id});
     return {
      id:customer.id,
      first_inbound_date:customer.first_inbound_date||null,
@@ -390,10 +409,13 @@ useEffect(()=>{
      deposit_completed:!!customer.deposited,
      stage:customer.stage,
      next_contact_at:customer.next_contact_at||null,
-     created_by:user.id,
+     owner_name:customer.owner_name||null,
+     created_by:(matched as any)?.created_by||user.id,
      updated_at:customer.updated_at||new Date().toISOString()
-    };
-   });
+     };
+    });
+
+   if(!confirm(`기존 고객 ${updatedCount}명은 갱신하고 신규 고객 ${newCount}명은 추가합니다. 계속할까요?`))return;
 
    let uploaded=0;
    for(let i=0;i<rows.length;i+=100){
@@ -410,7 +432,7 @@ useEffect(()=>{
 
    if(error)throw error;
    setCustomers((data||[]).map(normalizeCustomer));
-   alert(`${uploaded}명 업로드 완료`);
+   alert(`업로드 완료 · 기존 고객 ${updatedCount}명 갱신 · 신규 고객 ${newCount}명 추가`);
   }catch(error:any){
    console.error(error);
    alert(`업로드 실패: ${error?.message||'파일 또는 권한을 확인해 주세요.'}`);
