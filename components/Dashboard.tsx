@@ -9,6 +9,14 @@ const SECURITY_KEY='botrader-crm-security-final-v1';
 const stages:Stage[]=['신규','상담중','텔레그램','거래소가입','입금','활성회원','휴면','종료'];
 const grades:Sensitivity[]=['상','중','하','폐'];
 const roles:StaffRole[]=['최고관리자','관리자','일반담당자'];
+type ColumnKey='first_inbound_date'|'sensitivity'|'db_type'|'inbound_content'|'name'|'phone'|'telegram_alias'|'owner_name'|'consultation_count'|'consultation_content';
+
+function columnValue(customer:Customer,key:ColumnKey){
+ if(key==='consultation_count')return String(customer.consultation_history.length);
+ if(key==='consultation_content')return customer.consultation_history.at(-1)?.content||'-';
+ const value=customer[key as keyof Customer];
+ return String(value||'-');
+}
 
 function localDate(d=new Date()){const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`}
 function addDays(date:string,days:number){const d=new Date(`${date}T12:00:00`);d.setDate(d.getDate()+days);return localDate(d)}
@@ -46,6 +54,8 @@ export default function Dashboard({initial,authenticatedUserId,onLogout}:{initia
  const [showTomorrow,setShowTomorrow]=useState(false);
  const [showSecurity,setShowSecurity]=useState(false);
  const [importing,setImporting]=useState(false);
+ const [columnFilters,setColumnFilters]=useState<Partial<Record<ColumnKey,string[]>>>({});
+ const [openFilter,setOpenFilter]=useState<ColumnKey|null>(null);
 
  useEffect(()=>{
   async function load(){
@@ -124,7 +134,10 @@ useEffect(()=>{
  const scopedCustomers=useMemo(()=>isAdmin?customers:customers.filter(c=>c.owner_name===currentUser.name),[customers,currentUser.name,isAdmin]);
  const selected=scopedCustomers.find(x=>x.id===selectedId)||null;
  const dbTypes=useMemo(()=>Array.from(new Set(scopedCustomers.map(c=>c.db_type).filter(Boolean) as string[])).sort(),[scopedCustomers]);
- const rows=useMemo(()=>scopedCustomers.filter(c=>{const t=[c.name,c.phone,c.telegram_alias,c.inbound_content,c.owner_name,...c.consultation_history.map(x=>x.content)].join(' ').toLowerCase();return t.includes(q.toLowerCase())&&(grade==='전체'||c.sensitivity===grade)&&(dbType==='전체'||c.db_type===dbType)}),[scopedCustomers,q,grade,dbType]);
+ const rows=useMemo(()=>scopedCustomers.filter(c=>{const t=[c.name,c.phone,c.telegram_alias,c.inbound_content,c.owner_name,...c.consultation_history.map(x=>x.content)].join(' ').toLowerCase();return t.includes(q.toLowerCase())&&(grade==='전체'||c.sensitivity===grade)&&(dbType==='전체'||c.db_type===dbType)&&Object.entries(columnFilters).every(([key,values])=>!values?.length||values.includes(columnValue(c,key as ColumnKey)))}),[scopedCustomers,q,grade,dbType,columnFilters]);
+ const filterOptions=(key:ColumnKey)=>Array.from(new Set(scopedCustomers.filter(c=>Object.entries(columnFilters).every(([filterKey,values])=>filterKey===key||!values?.length||values.includes(columnValue(c,filterKey as ColumnKey)))).map(c=>columnValue(c,key)))).sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
+ const setColumnFilter=(key:ColumnKey,values:string[])=>setColumnFilters(prev=>({...prev,[key]:values}));
+ const activeColumnFilterCount=Object.values(columnFilters).filter(values=>values?.length).length;
  const total=scopedCustomers.length;
  const countConsulted=(date:string)=>scopedCustomers.filter(c=>c.consultation_history.some(x=>x.date===date)).length;
  const yesterdayConsulted=countConsulted(yesterday());
@@ -352,8 +365,9 @@ useEffect(()=>{
   <section className="kpis"><div className="card kpi">전체 DB 수<strong>{total}</strong></div><div className="card kpi">전일 상담 수<strong>{yesterdayConsulted}</strong></div><div className="card kpi">오늘 상담 수<strong>{todayConsulted}</strong></div><button className="card kpi clickableKpi" onClick={()=>setShowTomorrow(true)}>내일 상담 예약<strong>{tomorrowCustomers.length}</strong><span>목록 보기</span></button></section>
   <div className="dueBanner" onClick={()=>setShowDue(true)}><div><b>오늘 연락해야 할 고객</b><span>예정일이 오늘이거나 지난 고객을 확인합니다.</span></div><strong>{dueCustomers.length}명</strong></div>
   <div className="toolbar"><input placeholder="이름·마블링등급·상담내용 검색" value={q} onChange={e=>setQ(e.target.value)} style={{minWidth:300}}/><select value={grade} onChange={e=>setGrade(e.target.value)}><option>전체</option>{grades.map(x=><option key={x}>{x}</option>)}</select><select value={dbType} onChange={e=>setDbType(e.target.value)}><option>전체</option>{dbTypes.map(x=><option key={x}>{x}</option>)}</select><label className="buttonLike">백업 불러오기<input hidden type="file" accept="application/json" onChange={upload}/></label>{isAdmin&&<label className="buttonLike">{importing?'Supabase 업로드 중...':'기존 고객 Supabase 가져오기'}<input hidden type="file" accept="application/json" disabled={importing} onChange={importCustomersToSupabase}/></label>}<button onClick={download}>백업 다운로드</button>{isAdmin&&<button onClick={resetData}>초기화</button>}</div>
-  <div className="tableHint">열 제목의 오른쪽 가장자리를 드래그하면 폭을 넓히거나 줄일 수 있습니다.</div>
-  <div className="tableWrap"><table><thead><tr><ResizableTh label="최초 인입"/><ResizableTh label="감도"/><ResizableTh label="DB유형"/><ResizableTh label="DB유입메세지" wide/><ResizableTh label="이름/필명"/><ResizableTh label="마블링등급"/><ResizableTh label="텔레그램 필명"/><ResizableTh label="담당자"/><ResizableTh label="상담 횟수"/><ResizableTh label="상담내용" wide/></tr></thead><tbody>{rows.map(c=><tr key={c.id} className="clickable" onClick={()=>setSelectedId(c.id)}><td>{c.first_inbound_date||'-'}</td><td><span className={'badge '+({상:'high',중:'mid',하:'low',폐:'dead'}[c.sensitivity])}>{c.sensitivity}</span></td><td>{c.db_type||'-'}</td><td className="clipCell">{c.inbound_content||'-'}</td><td><b>{c.name||'-'}</b></td><td>{c.phone||'-'}</td><td>{c.telegram_alias||'-'}</td><td>{c.owner_name||'미배정'}</td><td><b>{c.consultation_history.length}회</b></td><td className="clipCell">{c.consultation_history.at(-1)?.content||'-'}</td></tr>)}</tbody></table></div>
+  <div className="tableHint">열 제목을 눌러 복수 필터를 적용할 수 있습니다. 오른쪽 가장자리를 드래그하면 열 폭을 조절할 수 있습니다.</div>
+  {activeColumnFilterCount>0&&<div className="activeFilters"><span>{activeColumnFilterCount}개 열 필터 적용 중 · {rows.length}명 표시</span><button type="button" onClick={()=>{setColumnFilters({});setOpenFilter(null)}}>모든 열 필터 해제</button></div>}
+  <div className="tableWrap"><table><thead><tr>{([['first_inbound_date','최초 인입'],['sensitivity','감도'],['db_type','DB유형'],['inbound_content','DB유입메세지'],['name','이름/필명'],['phone','마블링등급'],['telegram_alias','텔레그램 필명'],['owner_name','담당자'],['consultation_count','상담 횟수'],['consultation_content','상담내용']] as [ColumnKey,string][]).map(([key,label])=><ResizableTh key={key} columnKey={key} label={label} wide={key==='inbound_content'||key==='consultation_content'} options={filterOptions(key)} values={columnFilters[key]||[]} open={openFilter===key} onToggle={()=>setOpenFilter(openFilter===key?null:key)} onApply={values=>{setColumnFilter(key,values);setOpenFilter(null)}} onCancel={()=>setOpenFilter(null)}/>)}</tr></thead><tbody>{rows.length?rows.map(c=><tr key={c.id} className="clickable" onClick={()=>setSelectedId(c.id)}><td>{c.first_inbound_date||'-'}</td><td><span className={'badge '+({상:'high',중:'mid',하:'low',폐:'dead'}[c.sensitivity])}>{c.sensitivity}</span></td><td>{c.db_type||'-'}</td><td className="clipCell">{c.inbound_content||'-'}</td><td><b>{c.name||'-'}</b></td><td>{c.phone||'-'}</td><td>{c.telegram_alias||'-'}</td><td>{c.owner_name||'미배정'}</td><td><b>{c.consultation_history.length}회</b></td><td className="clipCell">{c.consultation_history.at(-1)?.content||'-'}</td></tr>):<tr><td colSpan={10} className="noFilterResults">선택한 필터 조합에 해당하는 고객이 없습니다.</td></tr>}</tbody></table></div>
 
   {selected&&!editing&&<CustomerDetail customer={selected} isAdmin={isAdmin} onClose={()=>setSelectedId(null)} onEdit={()=>setEditing({...selected,consultation_history:[...selected.consultation_history]})} onArchive={()=>archiveCustomer(selected.id)} onHardDelete={()=>hardDeleteCustomer(selected.id)} onAdd={addConsultation} onDeleteEntry={deleteConsultation}/>} 
   {editing&&<CustomerForm value={editing} owners={assignableStaff} onCancel={()=>setEditing(null)} onSave={saveCustomer}/>} 
@@ -364,7 +378,12 @@ useEffect(()=>{
  </main>
 }
 
-function ResizableTh({label,wide=false}:{label:string,wide?:boolean}){return <th className={wide?'wideTh':''}><div className="thResize">{label}</div></th>}
+function ResizableTh({columnKey,label,wide=false,options,values,open,onToggle,onApply,onCancel}:{columnKey:ColumnKey,label:string,wide?:boolean,options:string[],values:string[],open:boolean,onToggle:()=>void,onApply:(values:string[])=>void,onCancel:()=>void}){
+ const [draft,setDraft]=useState<string[]>(values);
+ useEffect(()=>{if(open)setDraft(values)},[open,values]);
+ const toggle=(option:string)=>setDraft(prev=>prev.includes(option)?prev.filter(value=>value!==option):[...prev,option]);
+ return <th className={(wide?'wideTh ':'')+(values.length?'filteredTh':'')}><div className="thResize"><button type="button" className="columnFilterButton" onClick={onToggle}>{label}<span>{values.length?`${values.length}개`:'▼'}</span></button>{open&&<div className="columnFilterMenu" onClick={e=>e.stopPropagation()}><div className="columnFilterTitle"><b>{label} 필터</b><button type="button" onClick={onCancel}>×</button></div><div className="columnFilterTools"><button type="button" onClick={()=>setDraft(options)}>전체 선택</button><button type="button" onClick={()=>setDraft([])}>전체 해제</button></div><div className="columnFilterOptions">{options.map(option=><label key={`${columnKey}-${option}`}><input type="checkbox" checked={draft.includes(option)} onChange={()=>toggle(option)}/><span>{option}</span></label>)}</div><div className="columnFilterActions"><button type="button" onClick={onCancel}>취소</button><button type="button" className="primary" onClick={()=>onApply(draft)}>적용</button></div></div>}</div></th>
+}
 
 function CustomerDetail({customer,isAdmin,onClose,onEdit,onArchive,onHardDelete,onAdd,onDeleteEntry}:{customer:Customer,isAdmin:boolean,onClose:()=>void,onEdit:()=>void,onArchive:()=>void,onHardDelete:()=>void,onAdd:(id:string,date:string,content:string,remindIn3Days:boolean)=>void,onDeleteEntry:(id:string,entryId:string)=>void}){
  const [date,setDate]=useState(today());const [content,setContent]=useState('');const [remind,setRemind]=useState(true);
