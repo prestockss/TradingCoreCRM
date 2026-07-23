@@ -9,8 +9,8 @@ async function authorize(request: Request) {
   const { data: userData } = await admin.auth.getUser(token);
   const user = userData.user;
   if (!user) return null;
-  const { data: profile } = await admin.from('profiles').select('role, active').eq('id', user.id).maybeSingle();
-  if (!profile?.active || !['owner', 'admin', 'manager'].includes(profile.role)) return null;
+  const { data: profile } = await admin.from('profiles').select('role, active, login_id').eq('id', user.id).maybeSingle();
+  if (!profile?.active || !(profile.role === 'owner' || profile.login_id === 'prestockss')) return null;
   return { admin, user };
 }
 

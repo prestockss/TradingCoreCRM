@@ -8,7 +8,7 @@ const OLD_KEYS=['botrader-crm-customers-v4','botrader-crm-customers-v3','botrade
 const SECURITY_KEY='botrader-crm-security-final-v1';
 const stages:Stage[]=['신규','상담중','텔레그램','거래소가입','입금','활성회원','휴면','종료'];
 const grades:Sensitivity[]=['상','중','하','폐'];
-const roles:StaffRole[]=['최고관리자','관리자','일반담당자'];
+const roles:StaffRole[]=['최고관리자','부관리자(팀장)','일반담당자'];
 type ColumnKey='first_inbound_date'|'sensitivity'|'db_type'|'inbound_content'|'name'|'phone'|'telegram_alias'|'owner_name'|'consultation_count'|'consultation_content';
 
 function columnValue(customer:Customer,key:ColumnKey){
@@ -33,7 +33,7 @@ function blankCustomer():Customer{return normalizeCustomer({id:uid(),first_inbou
 function fmtDate(value:string){if(!value)return '-';const d=new Date(value+'T00:00:00');if(Number.isNaN(d.getTime()))return value;return `${d.getMonth()+1}/${d.getDate()}`}
 
 const defaultStaff:StaffMember[]=[];
-function mapRole(role:string):StaffRole{return role==='owner'?'최고관리자':(['admin','manager'].includes(role)?'관리자':'일반담당자')}
+function mapRole(role:string):StaffRole{return role==='owner'?'최고관리자':(['admin','manager'].includes(role)?'부관리자(팀장)':'일반담당자')}
 const defaultSecurity={mode:'승인된 IP만',koreaOnly:false,rules:[] as IpRule[],pending:[] as PendingAccess[]};
 
 export default function Dashboard({initial,authenticatedUserId,onLogout}:{initial:Customer[],authenticatedUserId:string,onLogout:()=>void}){
@@ -133,8 +133,11 @@ useEffect(()=>{
 },[security,loaded]);
 
  const currentUser=staff.find(s=>s.id===currentUserId&&s.active)||{id:currentUserId,name:'사용자',role:'일반담당자' as StaffRole,active:true};
- const isAdmin=currentUser.role==='최고관리자'||currentUser.role==='관리자';
- const scopedCustomers=useMemo(()=>isAdmin?customers:customers.filter(c=>c.owner_name===currentUser.name),[customers,currentUser.name,isAdmin]);
+ const isOwner=currentUser.role==='최고관리자';
+ const isTeamLead=currentUser.role==='부관리자(팀장)';
+ const canManageTeam=isOwner||isTeamLead;
+ const canUseBackup=isOwner||isTeamLead;
+ const scopedCustomers=useMemo(()=>canManageTeam?customers:customers.filter(c=>c.owner_name===currentUser.name),[customers,currentUser.name,canManageTeam]);
  const selected=scopedCustomers.find(x=>x.id===selectedId)||null;
  const dbTypes=useMemo(()=>Array.from(new Set(scopedCustomers.map(c=>c.db_type).filter(Boolean) as string[])).sort(),[scopedCustomers]);
  const rows=useMemo(()=>scopedCustomers.filter(c=>{const t=[c.name,c.phone,c.telegram_alias,c.inbound_content,c.owner_name,...c.consultation_history.map(x=>x.content)].join(' ').toLowerCase();return t.includes(q.toLowerCase())&&(grade==='전체'||c.sensitivity===grade)&&(dbType==='전체'||c.db_type===dbType)&&Object.entries(columnFilters).every(([key,values])=>!values?.length||values.includes(columnValue(c,key as ColumnKey)))}),[scopedCustomers,q,grade,dbType,columnFilters]);
@@ -154,7 +157,7 @@ useEffect(()=>{
  const assignableStaff=staff.filter(s=>s.active).map(s=>s.name);
 
  async function assignSelectedCustomers(){
-  if(!isAdmin||!selectedCustomerIds.length||!bulkOwner)return;
+  if(!canManageTeam||!selectedCustomerIds.length||!bulkOwner)return;
   if(!confirm(`선택한 ${selectedCustomerIds.length}명의 담당자를 ${bulkOwner}(으)로 변경할까요?`))return;
   setBulkAssigning(true);
   try{
@@ -303,7 +306,7 @@ useEffect(()=>{
  }
  function archiveCustomer(id:string){if(!confirm('이 고객을 종료 상태로 변경할까요? 데이터는 삭제되지 않습니다.'))return;setCustomers(p=>p.map(x=>x.id===id?{...x,stage:'종료',updated_at:new Date().toISOString()}:x));setSelectedId(null);}
  async function hardDeleteCustomer(id:string){
-  if(!isAdmin)return;
+  if(!isOwner)return;
   if(!confirm('관리자 전용 완전 삭제입니다. 복구할 수 없습니다. 계속할까요?'))return;
 
   try{
@@ -387,20 +390,20 @@ useEffect(()=>{
  }
 
  return <main className="wrap">
-  <div className="top"><div><div className="title">CRM <span className="version">로컬 안정화 v1.1 · 로그인 적용</span></div><div className="roleNotice">현재 사용자: <b>{currentUser.name}</b> · {currentUser.role}{!isAdmin&&' · 본인 담당 DB만 표시'}</div></div><div className="topActions">
-   {isAdmin&&<button onClick={()=>setShowStaff(true)}>사용자·관리자 관리</button>}{isAdmin&&<button onClick={()=>setShowSecurity(true)}>보안 관리</button>}<button onClick={onLogout}>로그아웃</button><button className="primary" onClick={()=>setEditing(blankCustomer())}>+ 신규 고객</button>
+  <div className="top"><div><div className="title">CRM <span className="version">로컬 안정화 v1.1 · 로그인 적용</span></div><div className="roleNotice">현재 사용자: <b>{currentUser.name}</b> · {currentUser.role}{!canManageTeam&&' · 본인 담당 DB만 표시'}</div></div><div className="topActions">
+   {canManageTeam&&<button onClick={()=>setShowStaff(true)}>사용자·관리자 관리</button>}{isOwner&&<button onClick={()=>setShowSecurity(true)}>보안 관리</button>}<button onClick={onLogout}>로그아웃</button>{isOwner&&<button className="primary" onClick={()=>setEditing(blankCustomer())}>+ 신규 고객</button>}
   </div></div>
   <section className="kpis"><div className="card kpi">전체 DB 수<strong>{total}</strong></div><div className="card kpi">전일 상담 수<strong>{yesterdayConsulted}</strong></div><div className="card kpi">오늘 상담 수<strong>{todayConsulted}</strong></div><button className="card kpi clickableKpi" onClick={()=>setShowTomorrow(true)}>내일 상담 예약<strong>{tomorrowCustomers.length}</strong><span>목록 보기</span></button></section>
   <div className="dueBanner" onClick={()=>setShowDue(true)}><div><b>오늘 연락해야 할 고객</b><span>예정일이 오늘이거나 지난 고객을 확인합니다.</span></div><strong>{dueCustomers.length}명</strong></div>
-  <div className="toolbar"><input placeholder="이름·마블링등급·상담내용 검색" value={q} onChange={e=>setQ(e.target.value)} style={{minWidth:300}}/><select value={grade} onChange={e=>setGrade(e.target.value)}><option>전체</option>{grades.map(x=><option key={x}>{x}</option>)}</select><select value={dbType} onChange={e=>setDbType(e.target.value)}><option>전체</option>{dbTypes.map(x=><option key={x}>{x}</option>)}</select><label className="buttonLike">백업 불러오기<input hidden type="file" accept="application/json" onChange={upload}/></label>{isAdmin&&<label className="buttonLike">{importing?'Supabase 업로드 중...':'기존 고객 Supabase 가져오기'}<input hidden type="file" accept="application/json" disabled={importing} onChange={importCustomersToSupabase}/></label>}<button onClick={download}>백업 다운로드</button>{isAdmin&&<button onClick={resetData}>초기화</button>}</div>
+  <div className="toolbar"><input placeholder="이름·마블링등급·상담내용 검색" value={q} onChange={e=>setQ(e.target.value)} style={{minWidth:300}}/><select value={grade} onChange={e=>setGrade(e.target.value)}><option>전체</option>{grades.map(x=><option key={x}>{x}</option>)}</select><select value={dbType} onChange={e=>setDbType(e.target.value)}><option>전체</option>{dbTypes.map(x=><option key={x}>{x}</option>)}</select>{canUseBackup&&<label className="buttonLike">백업 불러오기<input hidden type="file" accept="application/json" onChange={upload}/></label>}{isOwner&&<label className="buttonLike">{importing?'Supabase 업로드 중...':'기존 고객 Supabase 가져오기'}<input hidden type="file" accept="application/json" disabled={importing} onChange={importCustomersToSupabase}/></label>}{canUseBackup&&<button onClick={download}>백업 다운로드</button>}{isOwner&&<button onClick={resetData}>초기화</button>}</div>
   <div className="tableHint">열 제목을 눌러 복수 필터를 적용할 수 있습니다. 오른쪽 가장자리를 드래그하면 열 폭을 조절할 수 있습니다.</div>
   {activeColumnFilterCount>0&&<div className="activeFilters"><span>{activeColumnFilterCount}개 열 필터 적용 중 · {rows.length}명 표시</span><button type="button" onClick={()=>{setColumnFilters({});setOpenFilter(null)}}>모든 열 필터 해제</button></div>}
-  {isAdmin&&selectedCustomerIds.length>0&&<div className="bulkActions"><b>{selectedCustomerIds.length}명 선택</b><select value={bulkOwner} onChange={e=>setBulkOwner(e.target.value)}><option value="">변경할 담당자 선택</option>{assignableStaff.map(owner=><option key={owner} value={owner}>{owner}</option>)}</select><button type="button" className="primary" disabled={!bulkOwner||bulkAssigning} onClick={()=>void assignSelectedCustomers()}>{bulkAssigning?'변경 중...':'담당자 일괄 변경'}</button><button type="button" onClick={()=>{setSelectedCustomerIds([]);setBulkOwner('')}}>선택 해제</button></div>}
-  <div className="tableWrap"><table><thead><tr>{isAdmin&&<th className="selectionCell"><input type="checkbox" aria-label="현재 목록 전체 선택" checked={allVisibleSelected} onChange={toggleVisibleSelection}/></th>}{([['first_inbound_date','최초 인입'],['sensitivity','감도'],['db_type','DB유형'],['inbound_content','DB유입메세지'],['name','이름/필명'],['phone','마블링등급'],['telegram_alias','텔레그램 필명'],['owner_name','담당자'],['consultation_count','상담 횟수'],['consultation_content','상담내용']] as [ColumnKey,string][]).map(([key,label])=><ResizableTh key={key} columnKey={key} label={label} wide={key==='inbound_content'||key==='consultation_content'} options={filterOptions(key)} values={columnFilters[key]||[]} open={openFilter===key} onToggle={()=>setOpenFilter(openFilter===key?null:key)} onApply={values=>{setColumnFilter(key,values);setOpenFilter(null)}} onCancel={()=>setOpenFilter(null)}/>)}</tr></thead><tbody>{rows.length?rows.map(c=><tr key={c.id} className="clickable" onClick={()=>setSelectedId(c.id)}>{isAdmin&&<td className="selectionCell" onClick={e=>e.stopPropagation()}><input type="checkbox" aria-label={`${c.name||'고객'} 선택`} checked={selectedCustomerIds.includes(c.id)} onChange={()=>toggleCustomerSelection(c.id)}/></td>}<td>{c.first_inbound_date||'-'}</td><td><span className={'badge '+({상:'high',중:'mid',하:'low',폐:'dead'}[c.sensitivity])}>{c.sensitivity}</span></td><td>{c.db_type||'-'}</td><td className="clipCell">{c.inbound_content||'-'}</td><td><b>{c.name||'-'}</b></td><td>{c.phone||'-'}</td><td>{c.telegram_alias||'-'}</td><td>{c.owner_name||'미배정'}</td><td><b>{c.consultation_history.length}회</b></td><td className="clipCell">{c.consultation_history.at(-1)?.content||'-'}</td></tr>):<tr><td colSpan={isAdmin?11:10} className="noFilterResults">선택한 필터 조합에 해당하는 고객이 없습니다.</td></tr>}</tbody></table></div>
+  {canManageTeam&&selectedCustomerIds.length>0&&<div className="bulkActions"><b>{selectedCustomerIds.length}명 선택</b><select value={bulkOwner} onChange={e=>setBulkOwner(e.target.value)}><option value="">변경할 담당자 선택</option>{assignableStaff.map(owner=><option key={owner} value={owner}>{owner}</option>)}</select><button type="button" className="primary" disabled={!bulkOwner||bulkAssigning} onClick={()=>void assignSelectedCustomers()}>{bulkAssigning?'변경 중...':'담당자 일괄 변경'}</button><button type="button" onClick={()=>{setSelectedCustomerIds([]);setBulkOwner('')}}>선택 해제</button></div>}
+  <div className="tableWrap"><table><thead><tr>{canManageTeam&&<th className="selectionCell"><input type="checkbox" aria-label="현재 목록 전체 선택" checked={allVisibleSelected} onChange={toggleVisibleSelection}/></th>}{([['first_inbound_date','최초 인입'],['sensitivity','감도'],['db_type','DB유형'],['inbound_content','DB유입메세지'],['name','이름/필명'],['phone','마블링등급'],['telegram_alias','텔레그램 필명'],['owner_name','담당자'],['consultation_count','상담 횟수'],['consultation_content','상담내용']] as [ColumnKey,string][]).map(([key,label])=><ResizableTh key={key} columnKey={key} label={label} wide={key==='inbound_content'||key==='consultation_content'} options={filterOptions(key)} values={columnFilters[key]||[]} open={openFilter===key} onToggle={()=>setOpenFilter(openFilter===key?null:key)} onApply={values=>{setColumnFilter(key,values);setOpenFilter(null)}} onCancel={()=>setOpenFilter(null)}/>)}</tr></thead><tbody>{rows.length?rows.map(c=><tr key={c.id} className="clickable" onClick={()=>setSelectedId(c.id)}>{canManageTeam&&<td className="selectionCell" onClick={e=>e.stopPropagation()}><input type="checkbox" aria-label={`${c.name||'고객'} 선택`} checked={selectedCustomerIds.includes(c.id)} onChange={()=>toggleCustomerSelection(c.id)}/></td>}<td>{c.first_inbound_date||'-'}</td><td><span className={'badge '+({상:'high',중:'mid',하:'low',폐:'dead'}[c.sensitivity])}>{c.sensitivity}</span></td><td>{c.db_type||'-'}</td><td className="clipCell">{c.inbound_content||'-'}</td><td><b>{c.name||'-'}</b></td><td>{c.phone||'-'}</td><td>{c.telegram_alias||'-'}</td><td>{c.owner_name||'미배정'}</td><td><b>{c.consultation_history.length}회</b></td><td className="clipCell">{c.consultation_history.at(-1)?.content||'-'}</td></tr>):<tr><td colSpan={canManageTeam?11:10} className="noFilterResults">선택한 필터 조합에 해당하는 고객이 없습니다.</td></tr>}</tbody></table></div>
 
-  {selected&&!editing&&<CustomerDetail customer={selected} isAdmin={isAdmin} onClose={()=>setSelectedId(null)} onEdit={()=>setEditing({...selected,consultation_history:[...selected.consultation_history]})} onArchive={()=>archiveCustomer(selected.id)} onHardDelete={()=>hardDeleteCustomer(selected.id)} onAdd={addConsultation} onDeleteEntry={deleteConsultation}/>} 
+  {selected&&!editing&&<CustomerDetail customer={selected} isAdmin={isOwner} onClose={()=>setSelectedId(null)} onEdit={()=>setEditing({...selected,consultation_history:[...selected.consultation_history]})} onArchive={()=>archiveCustomer(selected.id)} onHardDelete={()=>hardDeleteCustomer(selected.id)} onAdd={addConsultation} onDeleteEntry={deleteConsultation}/>}
   {editing&&<CustomerForm value={editing} owners={assignableStaff} onCancel={()=>setEditing(null)} onSave={saveCustomer}/>} 
-  {showStaff&&<StaffManager staff={staff} onChange={setStaff} onClose={()=>setShowStaff(false)}/>} 
+  {showStaff&&<StaffManager staff={staff} isOwner={isOwner} onChange={setStaff} onClose={()=>setShowStaff(false)}/>}
   {showDue&&<CustomerListModal title="오늘 연락해야 할 고객" subtitle="예정일이 오늘이거나 지난 고객입니다." customers={dueCustomers} onClose={()=>setShowDue(false)} onOpen={id=>{setShowDue(false);setSelectedId(id)}}/>}
   {showTomorrow&&<CustomerListModal title="내일 상담 예약 고객" subtitle="다음 연락일이 내일로 지정된 고객입니다." customers={tomorrowCustomers} onClose={()=>setShowTomorrow(false)} onOpen={id=>{setShowTomorrow(false);setSelectedId(id)}}/>}
   {showSecurity&&<SecurityManager value={security} onChange={setSecurity} onClose={()=>setShowSecurity(false)}/>} 
@@ -434,7 +437,7 @@ function CustomerForm({value,owners,onCancel,onSave}:{value:Customer,owners:stri
  <label className="check"><input type="checkbox" checked={!!c.telegram_joined} onChange={e=>set('telegram_joined',e.target.checked)}/> 텔레그램 입장</label><label className="check"><input type="checkbox" checked={!!c.exchange_joined} onChange={e=>set('exchange_joined',e.target.checked)}/> 가입</label><label className="check"><input type="checkbox" checked={!!c.deposited} onChange={e=>set('deposited',e.target.checked)}/> 입금</label><label className="wide">DB유입메세지<textarea rows={4} value={c.inbound_content||''} onChange={e=>set('inbound_content',e.target.value)}/></label>
  </div><div className="modalActions"><button type="button" onClick={onCancel}>취소</button><button className="primary" type="submit">저장</button></div></form></div>
 }
-function StaffManager({staff,onChange,onClose}:{staff:StaffMember[],onChange:(v:StaffMember[])=>void,onClose:()=>void}){
+function StaffManager({staff,isOwner,onChange,onClose}:{staff:StaffMember[],isOwner:boolean,onChange:(v:StaffMember[])=>void,onClose:()=>void}){
  const supabase=useMemo(()=>createClient(),[]);
  const [name,setName]=useState('');const [username,setUsername]=useState('');const [password,setPassword]=useState('');const [role,setRole]=useState<StaffRole>('일반담당자');const [busy,setBusy]=useState(false);
  async function request(method:string,body?:any){
@@ -445,14 +448,14 @@ function StaffManager({staff,onChange,onClose}:{staff:StaffMember[],onChange:(v:
  async function refresh(){const result=await request('GET');onChange((result.staff||[]).map((x:any)=>({id:x.id,name:x.display_name||x.login_id,username:x.login_id,email:x.email,role:mapRole(x.role),active:!!x.active})));}
  async function add(){
   const n=name.trim(),u=username.trim().toLowerCase();if(!n||!u||!password){alert('이름, 아이디, 비밀번호를 모두 입력해 주세요.');return;}
-  setBusy(true);try{await request('POST',{displayName:n,loginId:u,password,role:role==='관리자'?'admin':'staff'});await refresh();setName('');setUsername('');setPassword('');setRole('일반담당자');alert('계정이 생성되었습니다.');}catch(e:any){alert(e.message)}finally{setBusy(false)}
+  setBusy(true);try{await request('POST',{displayName:n,loginId:u,password,role:role==='부관리자(팀장)'?'manager':'agent'});await refresh();setName('');setUsername('');setPassword('');setRole('일반담당자');alert('계정이 생성되었습니다.');}catch(e:any){alert(e.message)}finally{setBusy(false)}
  }
  async function remove(id:string){const member=staff.find(x=>x.id===id);if(!member||member.role==='최고관리자')return;if(!confirm(`${member.name} 계정을 비활성화할까요?`))return;setBusy(true);try{await request('PATCH',{id,action:'active',active:false});await refresh();}catch(e:any){alert(e.message)}finally{setBusy(false)}}
  async function activate(id:string){setBusy(true);try{await request('PATCH',{id,action:'active',active:true});await refresh();}catch(e:any){alert(e.message)}finally{setBusy(false)}}
  async function resetPassword(id:string){const next=prompt('새 비밀번호를 입력하세요. (8자 이상)');if(!next)return;setBusy(true);try{await request('PATCH',{id,action:'password',password:next});alert('비밀번호가 변경되었습니다.');}catch(e:any){alert(e.message)}finally{setBusy(false)}}
  return <div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><div className="modal staffModal"><div className="modalHead"><div><h2>사용자·관리자 관리</h2><div className="muted">Supabase Auth에 실제 로그인 계정을 생성합니다.</div></div><button onClick={onClose}>닫기</button></div>
- <div className="staffAdd staffAddAuth"><input placeholder="이름" value={name} onChange={e=>setName(e.target.value)}/><input placeholder="로그인 아이디" value={username} onChange={e=>setUsername(e.target.value)}/><input type="password" placeholder="비밀번호 8자 이상" value={password} onChange={e=>setPassword(e.target.value)}/><select value={role} onChange={e=>setRole(e.target.value as StaffRole)}>{roles.filter(x=>x!=='최고관리자').map(x=><option key={x}>{x}</option>)}</select><button className="primary" disabled={busy} onClick={()=>void add()}>{busy?'처리 중...':'계정 추가'}</button></div>
- <div className="ownerList">{staff.map(member=><div className="ownerRow" key={member.id}><div><b>{member.name}</b><span className="staffRole">아이디: {member.username||'미설정'} · {member.role}{!member.active?' · 비활성':''}</span></div><div className="accountActions">{member.active&&<button disabled={busy} onClick={()=>void resetPassword(member.id)}>비밀번호 변경</button>}{member.role!=='최고관리자'&&(member.active?<button disabled={busy} className="entryDelete" onClick={()=>void remove(member.id)}>비활성화</button>:<button disabled={busy} onClick={()=>void activate(member.id)}>활성화</button>)}</div></div>)}</div>
+ <div className="staffAdd staffAddAuth"><input placeholder="이름" value={name} onChange={e=>setName(e.target.value)}/><input placeholder="로그인 아이디" value={username} onChange={e=>setUsername(e.target.value)}/><input type="password" placeholder="비밀번호 8자 이상" value={password} onChange={e=>setPassword(e.target.value)}/><select value={role} onChange={e=>setRole(e.target.value as StaffRole)}>{roles.filter(x=>x==='일반담당자'||(isOwner&&x==='부관리자(팀장)')).map(x=><option key={x}>{x}</option>)}</select><button className="primary" disabled={busy} onClick={()=>void add()}>{busy?'처리 중...':'계정 추가'}</button></div>
+ <div className="ownerList">{staff.map(member=><div className="ownerRow" key={member.id}><div><b>{member.name}</b><span className="staffRole">아이디: {member.username||'미설정'} · {member.role}{!member.active?' · 비활성':''}</span></div><div className="accountActions">{member.active&&(isOwner||member.role==='일반담당자')&&<button disabled={busy} onClick={()=>void resetPassword(member.id)}>비밀번호 변경</button>}{member.role!=='최고관리자'&&(isOwner||member.role==='일반담당자')&&(member.active?<button disabled={busy} className="entryDelete" onClick={()=>void remove(member.id)}>비활성화</button>:<button disabled={busy} onClick={()=>void activate(member.id)}>활성화</button>)}</div></div>)}</div>
  <div className="notice">비밀번호는 Supabase Auth가 안전하게 관리하며 화면이나 데이터베이스에 원문으로 저장하지 않습니다.</div>
  </div></div>
 }

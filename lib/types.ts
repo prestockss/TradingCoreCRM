@@ -1,6 +1,6 @@
 export type Sensitivity='상'|'중'|'하'|'폐';
 export type Stage='신규'|'상담중'|'텔레그램'|'거래소가입'|'입금'|'활성회원'|'휴면'|'종료';
-export type StaffRole='최고관리자'|'관리자'|'일반담당자';
+export type StaffRole='최고관리자'|'부관리자(팀장)'|'일반담당자';
 export interface ConsultationEntry { id:string; date:string; content:string; created_at:string; }
 export interface Customer{
  id:string;
