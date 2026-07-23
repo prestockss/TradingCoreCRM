@@ -1,5 +1,5 @@
 'use client';
-import {useEffect,useMemo,useState} from 'react';
+import {useEffect,useMemo,useState,type PointerEvent as ReactPointerEvent} from 'react';
 import type {ConsultationEntry,Customer,IpRule,PendingAccess,Sensitivity,StaffMember,StaffRole,Stage} from '@/lib/types';
 import {createClient} from '@/lib/supabase';
 
@@ -489,12 +489,34 @@ useEffect(()=>{
 
 function ResizableTh({columnKey,label,wide=false,options,values,open,sortDirection,onToggle,onSort,onApply,onCancel}:{columnKey:ColumnKey,label:string,wide?:boolean,options:string[],values:string[],open:boolean,sortDirection:SortDirection|null,onToggle:()=>void,onSort:(direction:SortDirection)=>void,onApply:(values:string[])=>void,onCancel:()=>void}){
  const [draft,setDraft]=useState<string[]>(values);
+ const [width,setWidth]=useState<number|null>(null);
  useEffect(()=>{if(open)setDraft(values)},[open,values]);
  const toggle=(option:string)=>setDraft(prev=>prev.includes(option)?prev.filter(value=>value!==option):[...prev,option]);
+ const beginResize=(event:ReactPointerEvent<HTMLSpanElement>)=>{
+  event.preventDefault();
+  event.stopPropagation();
+  const header=event.currentTarget.closest('th');
+  if(!header)return;
+  const startX=event.clientX;
+  const startWidth=header.getBoundingClientRect().width;
+  const minimum=wide?180:90;
+  const previousUserSelect=document.body.style.userSelect;
+  document.body.style.userSelect='none';
+  const move=(moveEvent:PointerEvent)=>setWidth(Math.max(minimum,Math.min(600,startWidth+moveEvent.clientX-startX)));
+  const stop=()=>{
+   document.body.style.userSelect=previousUserSelect;
+   window.removeEventListener('pointermove',move);
+   window.removeEventListener('pointerup',stop);
+   window.removeEventListener('pointercancel',stop);
+  };
+  window.addEventListener('pointermove',move);
+  window.addEventListener('pointerup',stop);
+  window.addEventListener('pointercancel',stop);
+ };
  const ascendingLabel=columnKey==='first_inbound_date'?'오래된 날짜순':columnKey==='consultation_count'?'작은 숫자순':'오름차순 (가→하 · A→Z · 숫자↑)';
  const descendingLabel=columnKey==='first_inbound_date'?'최신 날짜순':columnKey==='consultation_count'?'큰 숫자순':'내림차순 (하→가 · Z→A · 숫자↓)';
  const indicator=`${values.length?`${values.length}개 `:''}${sortDirection==='asc'?'↑':sortDirection==='desc'?'↓':'▼'}`;
- return <th className={(wide?'wideTh ':'')+(values.length?'filteredTh ':'')+(sortDirection?'sortedTh':'')}><div className="thResize"><button type="button" className="columnFilterButton" onClick={onToggle}>{label}<span>{indicator}</span></button>{open&&<div className="columnFilterMenu" onClick={e=>e.stopPropagation()}><div className="columnFilterTitle"><b>{label} 필터·정렬</b><button type="button" onClick={onCancel}>×</button></div><div className="columnSortTools"><button type="button" className={sortDirection==='asc'?'activeSort':''} onClick={()=>onSort('asc')}>↑ {ascendingLabel}</button><button type="button" className={sortDirection==='desc'?'activeSort':''} onClick={()=>onSort('desc')}>↓ {descendingLabel}</button></div><div className="columnFilterTools"><button type="button" onClick={()=>setDraft(options)}>전체 선택</button><button type="button" onClick={()=>setDraft([])}>전체 해제</button></div><div className="columnFilterOptions">{options.map(option=><label key={`${columnKey}-${option}`}><input type="checkbox" checked={draft.includes(option)} onChange={()=>toggle(option)}/><span>{option}</span></label>)}</div><div className="columnFilterActions"><button type="button" onClick={onCancel}>취소</button><button type="button" className="primary" onClick={()=>onApply(draft)}>적용</button></div></div>}</div></th>
+ return <th className={(wide?'wideTh ':'')+(values.length?'filteredTh ':'')+(sortDirection?'sortedTh':'')} style={width?{width,minWidth:width,maxWidth:width}:undefined}><div className="thResize"><button type="button" className="columnFilterButton" onClick={onToggle}>{label}<span>{indicator}</span></button>{open&&<div className="columnFilterMenu" onClick={e=>e.stopPropagation()}><div className="columnFilterTitle"><b>{label} 필터·정렬</b><button type="button" onClick={onCancel}>×</button></div><div className="columnSortTools"><button type="button" className={sortDirection==='asc'?'activeSort':''} onClick={()=>onSort('asc')}>↑ {ascendingLabel}</button><button type="button" className={sortDirection==='desc'?'activeSort':''} onClick={()=>onSort('desc')}>↓ {descendingLabel}</button></div><div className="columnFilterTools"><button type="button" onClick={()=>setDraft(options)}>전체 선택</button><button type="button" onClick={()=>setDraft([])}>전체 해제</button></div><div className="columnFilterOptions">{options.map(option=><label key={`${columnKey}-${option}`}><input type="checkbox" checked={draft.includes(option)} onChange={()=>toggle(option)}/><span>{option}</span></label>)}</div><div className="columnFilterActions"><button type="button" onClick={onCancel}>취소</button><button type="button" className="primary" onClick={()=>onApply(draft)}>적용</button></div></div>}</div><span className="columnResizeHandle" role="separator" aria-label={`${label} 열 너비 조절`} onPointerDown={beginResize}/></th>
 }
 
 function CustomerDetail({customer,isAdmin,canEditCore,onClose,onEdit,onArchive,onHardDelete,onAdd,onDeleteEntry,onUpdateNextContact}:{customer:Customer,isAdmin:boolean,canEditCore:boolean,onClose:()=>void,onEdit:()=>void,onArchive:()=>void,onHardDelete:()=>void,onAdd:(id:string,date:string,content:string,remindIn3Days:boolean)=>void,onDeleteEntry:(id:string,entryId:string)=>void,onUpdateNextContact:(id:string,date:string|null)=>Promise<void>}){
