@@ -382,9 +382,11 @@ useEffect(()=>{
 
    const seenPhones=new Map<string,number>();
    const seenNames=new Map<string,number>();
+   const incomingCustomers=parsed.map((raw:any)=>normalizeCustomer(raw));
+   const missingCustomers=customers.filter(existing=>!incomingCustomers.some(incoming=>sameCustomer(existing,incoming)));
    let updatedCount=0,newCount=0;
    const rows=parsed.map((raw:any,index:number)=>{
-    const incoming=normalizeCustomer(raw);
+    const incoming=incomingCustomers[index];
     const phoneKey=normalizedPhone(incoming.phone);
     const nameKey=!phoneKey&&normalizedName(incoming.name)&&dateOnly(incoming.first_inbound_date)?`${normalizedName(incoming.name)}|${dateOnly(incoming.first_inbound_date)}`:'';
     if(phoneKey&&seenPhones.has(phoneKey))throw new Error(`${index+1}번째와 ${seenPhones.get(phoneKey)}번째 고객의 마블링등급이 중복됩니다.`);
@@ -416,6 +418,7 @@ useEffect(()=>{
     });
 
    if(!confirm(`기존 고객 ${updatedCount}명은 갱신하고 신규 고객 ${newCount}명은 추가합니다. 계속할까요?`))return;
+   const deleteMissing=missingCustomers.length>0&&confirm(`현재 CRM에만 있고 파일에는 없는 고객 ${missingCustomers.length}명을 삭제하여 파일과 동일하게 맞출까요?\n\n취소를 누르면 기존 고객을 보존한 채 병합만 진행합니다.`);
 
    let uploaded=0;
    for(let i=0;i<rows.length;i+=100){
@@ -425,6 +428,14 @@ useEffect(()=>{
     uploaded+=batch.length;
    }
 
+   if(deleteMissing){
+    const missingIds=missingCustomers.map(customer=>customer.id);
+    for(let i=0;i<missingIds.length;i+=100){
+     const {error}=await supabase.from('customers').delete().in('id',missingIds.slice(i,i+100));
+     if(error)throw error;
+    }
+   }
+
    const {data,error}=await supabase
     .from('customers')
     .select('*')
@@ -432,7 +443,7 @@ useEffect(()=>{
 
    if(error)throw error;
    setCustomers((data||[]).map(normalizeCustomer));
-   alert(`업로드 완료 · 기존 고객 ${updatedCount}명 갱신 · 신규 고객 ${newCount}명 추가`);
+   alert(`업로드 완료 · 기존 고객 ${updatedCount}명 갱신 · 신규 고객 ${newCount}명 추가${deleteMissing?` · CRM 전용 고객 ${missingCustomers.length}명 삭제`:''}`);
   }catch(error:any){
    console.error(error);
    alert(`업로드 실패: ${error?.message||'파일 또는 권한을 확인해 주세요.'}`);
