@@ -21,7 +21,7 @@ function normalizedPhone(value:string|null|undefined){return String(value||'').r
 function normalizedName(value:string|null|undefined){return String(value||'').replace(/\s+/g,'').toLowerCase()}
 function sameCustomer(a:Customer,b:Customer){
  const aPhone=normalizedPhone(a.phone),bPhone=normalizedPhone(b.phone);
- if(aPhone&&bPhone&&aPhone===bPhone)return true;
+ if(aPhone&&bPhone)return aPhone===bPhone;
  const aName=normalizedName(a.name),bName=normalizedName(b.name);
  return !!aName&&aName===bName&&dateOnly(a.first_inbound_date)===dateOnly(b.first_inbound_date);
 }
@@ -386,7 +386,7 @@ useEffect(()=>{
    const rows=parsed.map((raw:any,index:number)=>{
     const incoming=normalizeCustomer(raw);
     const phoneKey=normalizedPhone(incoming.phone);
-    const nameKey=normalizedName(incoming.name)&&dateOnly(incoming.first_inbound_date)?`${normalizedName(incoming.name)}|${dateOnly(incoming.first_inbound_date)}`:'';
+    const nameKey=!phoneKey&&normalizedName(incoming.name)&&dateOnly(incoming.first_inbound_date)?`${normalizedName(incoming.name)}|${dateOnly(incoming.first_inbound_date)}`:'';
     if(phoneKey&&seenPhones.has(phoneKey))throw new Error(`${index+1}번째와 ${seenPhones.get(phoneKey)}번째 고객의 마블링등급이 중복됩니다.`);
     if(nameKey&&seenNames.has(nameKey))throw new Error(`${index+1}번째와 ${seenNames.get(nameKey)}번째 고객의 이름·인입일이 중복됩니다.`);
     if(phoneKey)seenPhones.set(phoneKey,index+1);
