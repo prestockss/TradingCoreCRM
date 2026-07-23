@@ -203,8 +203,63 @@ useEffect(()=>{
     alert(`저장 실패: ${error?.message||'권한 또는 입력값을 확인해 주세요.'}`);
   }
  }
- function addConsultation(customerId:string,date:string,content:string,remindIn3Days:boolean){if(!content.trim())return;const entry:ConsultationEntry={id:uid(),date:date||today(),content:content.trim(),created_at:new Date().toISOString()};setCustomers(prev=>prev.map(c=>c.id===customerId?normalizeCustomer({...c,consultation_history:[...c.consultation_history,entry],consultation_notes:[...c.consultation_history,entry].map(x=>x.content).join('\n'),next_contact_at:remindIn3Days?addDays(date||today(),3):c.next_contact_at,updated_at:new Date().toISOString()}):c));}
- function deleteConsultation(customerId:string,entryId:string){if(!confirm('이 상담 기록을 삭제할까요?'))return;setCustomers(prev=>prev.map(c=>{if(c.id!==customerId)return c;const history=c.consultation_history.filter(x=>x.id!==entryId);return normalizeCustomer({...c,consultation_history:history,consultation_notes:history.map(x=>x.content).join('\n')});}));}
+ async function addConsultation(customerId:string,date:string,content:string,remindIn3Days:boolean){
+  if(!content.trim())return;
+  const customer=customers.find(c=>c.id===customerId);
+  if(!customer)return;
+
+  const entry:ConsultationEntry={id:uid(),date:date||today(),content:content.trim(),created_at:new Date().toISOString()};
+  const history=[...customer.consultation_history,entry];
+  const nextContactAt=remindIn3Days?addDays(date||today(),3):customer.next_contact_at;
+
+  try{
+   const {data,error}=await supabase
+    .from('customers')
+    .update({
+     consultation_history:history,
+     consultation_notes:history.map(x=>x.content).join('\n'),
+     next_contact_at:nextContactAt,
+     updated_at:new Date().toISOString()
+    })
+    .eq('id',customerId)
+    .select('*')
+    .single();
+
+   if(error)throw error;
+   const saved=normalizeCustomer(data);
+   setCustomers(prev=>prev.map(c=>c.id===customerId?saved:c));
+  }catch(error:any){
+   console.error(error);
+   alert(`메모 저장 실패: ${error?.message||'알 수 없는 오류'}`);
+  }
+ }
+ async function deleteConsultation(customerId:string,entryId:string){
+  if(!confirm('이 상담 기록을 삭제할까요?'))return;
+  const customer=customers.find(c=>c.id===customerId);
+  if(!customer)return;
+
+  const history=customer.consultation_history.filter(x=>x.id!==entryId);
+
+  try{
+   const {data,error}=await supabase
+    .from('customers')
+    .update({
+     consultation_history:history,
+     consultation_notes:history.map(x=>x.content).join('\n'),
+     updated_at:new Date().toISOString()
+    })
+    .eq('id',customerId)
+    .select('*')
+    .single();
+
+   if(error)throw error;
+   const saved=normalizeCustomer(data);
+   setCustomers(prev=>prev.map(c=>c.id===customerId?saved:c));
+  }catch(error:any){
+   console.error(error);
+   alert(`메모 삭제 실패: ${error?.message||'알 수 없는 오류'}`);
+  }
+ }
  function archiveCustomer(id:string){if(!confirm('이 고객을 종료 상태로 변경할까요? 데이터는 삭제되지 않습니다.'))return;setCustomers(p=>p.map(x=>x.id===id?{...x,stage:'종료',updated_at:new Date().toISOString()}:x));setSelectedId(null);}
  async function hardDeleteCustomer(id:string){
   if(!isAdmin)return;
