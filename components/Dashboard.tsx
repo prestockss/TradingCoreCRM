@@ -98,11 +98,94 @@ useEffect(()=>{
  const dueCustomers=useMemo(()=>scopedCustomers.filter(c=>c.next_contact_at&&c.next_contact_at<=today()).sort((a,b)=>(a.next_contact_at||'').localeCompare(b.next_contact_at||'')),[scopedCustomers]);
  const assignableStaff=staff.filter(s=>s.active).map(s=>s.name);
 
- function saveCustomer(c:Customer){const next=normalizeCustomer({...c,updated_at:new Date().toISOString()});setCustomers(prev=>prev.some(x=>x.id===next.id)?prev.map(x=>x.id===next.id?next:x):[next,...prev]);setEditing(null);setSelectedId(next.id);}
+ async function saveCustomer(c:Customer){
+  const next=normalizeCustomer({...c,updated_at:new Date().toISOString()});
+  const alreadyExists=customers.some(x=>x.id===next.id);
+
+  try{
+    const {data:{user},error:userError}=await supabase.auth.getUser();
+    if(userError||!user)throw new Error('로그인 사용자 정보를 확인할 수 없습니다. 다시 로그인해 주세요.');
+
+    const payload={
+      first_inbound_date:next.first_inbound_date||null,
+      sensitivity:next.sensitivity,
+      db_type:next.db_type||null,
+      inbound_message:next.inbound_content||null,
+      name:next.name?.trim()||next.phone?.trim()||'이름 미입력',
+      phone:next.phone||null,
+      telegram_name:next.telegram_alias||null,
+      telegram_joined:!!next.telegram_joined,
+      exchange_joined:!!next.exchange_joined,
+      exchange_name:next.exchange_name||null,
+      deposit_completed:!!next.deposited,
+      stage:next.stage,
+      next_contact_at:next.next_contact_at||null,
+      updated_at:next.updated_at
+    };
+
+    if(alreadyExists){
+      const {data,error}=await supabase
+        .from('customers')
+        .update(payload)
+        .eq('id',next.id)
+        .select('*')
+        .single();
+
+      if(error)throw error;
+
+      const saved=normalizeCustomer(data);
+      setCustomers(prev=>prev.map(x=>x.id===saved.id?saved:x));
+      setEditing(null);
+      setSelectedId(saved.id);
+      alert('고객 정보가 Supabase에 수정 저장되었습니다.');
+      return;
+    }
+
+    const {data,error}=await supabase
+      .from('customers')
+      .insert({
+        id:next.id,
+        ...payload,
+        created_by:user.id
+      })
+      .select('*')
+      .single();
+
+    if(error)throw error;
+
+    const saved=normalizeCustomer(data);
+    setCustomers(prev=>[saved,...prev]);
+    setEditing(null);
+    setSelectedId(saved.id);
+    alert('신규 고객이 Supabase에 저장되었습니다.');
+  }catch(error:any){
+    console.error(error);
+    alert(`저장 실패: ${error?.message||'권한 또는 입력값을 확인해 주세요.'}`);
+  }
+ }
  function addConsultation(customerId:string,date:string,content:string,remindIn3Days:boolean){if(!content.trim())return;const entry:ConsultationEntry={id:uid(),date:date||today(),content:content.trim(),created_at:new Date().toISOString()};setCustomers(prev=>prev.map(c=>c.id===customerId?normalizeCustomer({...c,consultation_history:[...c.consultation_history,entry],consultation_notes:[...c.consultation_history,entry].map(x=>x.content).join('\n'),next_contact_at:remindIn3Days?addDays(date||today(),3):c.next_contact_at,updated_at:new Date().toISOString()}):c));}
  function deleteConsultation(customerId:string,entryId:string){if(!confirm('이 상담 기록을 삭제할까요?'))return;setCustomers(prev=>prev.map(c=>{if(c.id!==customerId)return c;const history=c.consultation_history.filter(x=>x.id!==entryId);return normalizeCustomer({...c,consultation_history:history,consultation_notes:history.map(x=>x.content).join('\n')});}));}
  function archiveCustomer(id:string){if(!confirm('이 고객을 종료 상태로 변경할까요? 데이터는 삭제되지 않습니다.'))return;setCustomers(p=>p.map(x=>x.id===id?{...x,stage:'종료',updated_at:new Date().toISOString()}:x));setSelectedId(null);}
- function hardDeleteCustomer(id:string){if(!isAdmin)return;if(!confirm('관리자 전용 완전 삭제입니다. 복구할 수 없습니다. 계속할까요?'))return;setCustomers(p=>p.filter(x=>x.id!==id));setSelectedId(null);}
+ async function hardDeleteCustomer(id:string){
+  if(!isAdmin)return;
+  if(!confirm('관리자 전용 완전 삭제입니다. 복구할 수 없습니다. 계속할까요?'))return;
+
+  try{
+    const {error}=await supabase
+      .from('customers')
+      .delete()
+      .eq('id',id);
+
+    if(error)throw error;
+
+    setCustomers(prev=>prev.filter(customer=>customer.id!==id));
+    setSelectedId(null);
+    alert('고객이 Supabase에서 완전히 삭제되었습니다.');
+  }catch(error:any){
+    console.error(error);
+    alert(`삭제 실패: ${error?.message||'삭제 권한을 확인해 주세요.'}`);
+  }
+ }
  function resetData(){if(confirm('입력·수정한 내용을 모두 지우고 최초 데이터로 되돌릴까요?')){setCustomers(normalizedInitial);localStorage.removeItem(STORAGE_KEY);for(const key of OLD_KEYS)localStorage.removeItem(key);}}
  function download(){const blob=new Blob([JSON.stringify(customers,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='CRM_백업.json';a.click();URL.revokeObjectURL(a.href)}
  function upload(e:React.ChangeEvent<HTMLInputElement>){const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const parsed=JSON.parse(String(r.result));if(!Array.isArray(parsed))throw new Error();setCustomers(parsed.map(normalizeCustomer));alert('백업 파일을 불러왔습니다.')}catch{alert('CRM_백업.json 파일을 확인해 주세요.')}};r.readAsText(f);e.target.value='';}
