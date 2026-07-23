@@ -54,6 +54,9 @@ export default function Dashboard({initial,authenticatedUserId,onLogout}:{initia
  const [showTomorrow,setShowTomorrow]=useState(false);
  const [showSecurity,setShowSecurity]=useState(false);
  const [importing,setImporting]=useState(false);
+ const [selectedCustomerIds,setSelectedCustomerIds]=useState<string[]>([]);
+ const [bulkOwner,setBulkOwner]=useState('');
+ const [bulkAssigning,setBulkAssigning]=useState(false);
  const [columnFilters,setColumnFilters]=useState<Partial<Record<ColumnKey,string[]>>>({});
  const [openFilter,setOpenFilter]=useState<ColumnKey|null>(null);
 
@@ -138,6 +141,10 @@ useEffect(()=>{
  const filterOptions=(key:ColumnKey)=>Array.from(new Set(scopedCustomers.filter(c=>Object.entries(columnFilters).every(([filterKey,values])=>filterKey===key||!values?.length||values.includes(columnValue(c,filterKey as ColumnKey)))).map(c=>columnValue(c,key)))).sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
  const setColumnFilter=(key:ColumnKey,values:string[])=>setColumnFilters(prev=>({...prev,[key]:values}));
  const activeColumnFilterCount=Object.values(columnFilters).filter(values=>values?.length).length;
+ const visibleIds=rows.map(customer=>customer.id);
+ const allVisibleSelected=visibleIds.length>0&&visibleIds.every(id=>selectedCustomerIds.includes(id));
+ const toggleCustomerSelection=(id:string)=>setSelectedCustomerIds(prev=>prev.includes(id)?prev.filter(value=>value!==id):[...prev,id]);
+ const toggleVisibleSelection=()=>setSelectedCustomerIds(prev=>allVisibleSelected?prev.filter(id=>!visibleIds.includes(id)):Array.from(new Set([...prev,...visibleIds])));
  const total=scopedCustomers.length;
  const countConsulted=(date:string)=>scopedCustomers.filter(c=>c.consultation_history.some(x=>x.date===date)).length;
  const yesterdayConsulted=countConsulted(yesterday());
@@ -145,6 +152,27 @@ useEffect(()=>{
  const tomorrowCustomers=useMemo(()=>scopedCustomers.filter(c=>c.next_contact_at===tomorrow()).sort((a,b)=>(a.owner_name||'').localeCompare(b.owner_name||'')),[scopedCustomers]);
  const dueCustomers=useMemo(()=>scopedCustomers.filter(c=>c.next_contact_at&&c.next_contact_at<=today()).sort((a,b)=>(a.next_contact_at||'').localeCompare(b.next_contact_at||'')),[scopedCustomers]);
  const assignableStaff=staff.filter(s=>s.active).map(s=>s.name);
+
+ async function assignSelectedCustomers(){
+  if(!isAdmin||!selectedCustomerIds.length||!bulkOwner)return;
+  if(!confirm(`선택한 ${selectedCustomerIds.length}명의 담당자를 ${bulkOwner}(으)로 변경할까요?`))return;
+  setBulkAssigning(true);
+  try{
+   const updatedAt=new Date().toISOString();
+   const {error}=await supabase.from('customers').update({owner_name:bulkOwner,updated_at:updatedAt}).in('id',selectedCustomerIds);
+   if(error)throw error;
+   setCustomers(prev=>prev.map(customer=>selectedCustomerIds.includes(customer.id)?{...customer,owner_name:bulkOwner,updated_at:updatedAt}:customer));
+   const count=selectedCustomerIds.length;
+   setSelectedCustomerIds([]);
+   setBulkOwner('');
+   alert(`${count}명의 담당자를 변경했습니다.`);
+  }catch(error:any){
+   console.error(error);
+   alert(`담당자 일괄 변경 실패: ${error?.message||'권한을 확인해 주세요.'}`);
+  }finally{
+   setBulkAssigning(false);
+  }
+ }
 
  async function saveCustomer(c:Customer){
   const next=normalizeCustomer({
@@ -367,7 +395,8 @@ useEffect(()=>{
   <div className="toolbar"><input placeholder="이름·마블링등급·상담내용 검색" value={q} onChange={e=>setQ(e.target.value)} style={{minWidth:300}}/><select value={grade} onChange={e=>setGrade(e.target.value)}><option>전체</option>{grades.map(x=><option key={x}>{x}</option>)}</select><select value={dbType} onChange={e=>setDbType(e.target.value)}><option>전체</option>{dbTypes.map(x=><option key={x}>{x}</option>)}</select><label className="buttonLike">백업 불러오기<input hidden type="file" accept="application/json" onChange={upload}/></label>{isAdmin&&<label className="buttonLike">{importing?'Supabase 업로드 중...':'기존 고객 Supabase 가져오기'}<input hidden type="file" accept="application/json" disabled={importing} onChange={importCustomersToSupabase}/></label>}<button onClick={download}>백업 다운로드</button>{isAdmin&&<button onClick={resetData}>초기화</button>}</div>
   <div className="tableHint">열 제목을 눌러 복수 필터를 적용할 수 있습니다. 오른쪽 가장자리를 드래그하면 열 폭을 조절할 수 있습니다.</div>
   {activeColumnFilterCount>0&&<div className="activeFilters"><span>{activeColumnFilterCount}개 열 필터 적용 중 · {rows.length}명 표시</span><button type="button" onClick={()=>{setColumnFilters({});setOpenFilter(null)}}>모든 열 필터 해제</button></div>}
-  <div className="tableWrap"><table><thead><tr>{([['first_inbound_date','최초 인입'],['sensitivity','감도'],['db_type','DB유형'],['inbound_content','DB유입메세지'],['name','이름/필명'],['phone','마블링등급'],['telegram_alias','텔레그램 필명'],['owner_name','담당자'],['consultation_count','상담 횟수'],['consultation_content','상담내용']] as [ColumnKey,string][]).map(([key,label])=><ResizableTh key={key} columnKey={key} label={label} wide={key==='inbound_content'||key==='consultation_content'} options={filterOptions(key)} values={columnFilters[key]||[]} open={openFilter===key} onToggle={()=>setOpenFilter(openFilter===key?null:key)} onApply={values=>{setColumnFilter(key,values);setOpenFilter(null)}} onCancel={()=>setOpenFilter(null)}/>)}</tr></thead><tbody>{rows.length?rows.map(c=><tr key={c.id} className="clickable" onClick={()=>setSelectedId(c.id)}><td>{c.first_inbound_date||'-'}</td><td><span className={'badge '+({상:'high',중:'mid',하:'low',폐:'dead'}[c.sensitivity])}>{c.sensitivity}</span></td><td>{c.db_type||'-'}</td><td className="clipCell">{c.inbound_content||'-'}</td><td><b>{c.name||'-'}</b></td><td>{c.phone||'-'}</td><td>{c.telegram_alias||'-'}</td><td>{c.owner_name||'미배정'}</td><td><b>{c.consultation_history.length}회</b></td><td className="clipCell">{c.consultation_history.at(-1)?.content||'-'}</td></tr>):<tr><td colSpan={10} className="noFilterResults">선택한 필터 조합에 해당하는 고객이 없습니다.</td></tr>}</tbody></table></div>
+  {isAdmin&&selectedCustomerIds.length>0&&<div className="bulkActions"><b>{selectedCustomerIds.length}명 선택</b><select value={bulkOwner} onChange={e=>setBulkOwner(e.target.value)}><option value="">변경할 담당자 선택</option>{assignableStaff.map(owner=><option key={owner} value={owner}>{owner}</option>)}</select><button type="button" className="primary" disabled={!bulkOwner||bulkAssigning} onClick={()=>void assignSelectedCustomers()}>{bulkAssigning?'변경 중...':'담당자 일괄 변경'}</button><button type="button" onClick={()=>{setSelectedCustomerIds([]);setBulkOwner('')}}>선택 해제</button></div>}
+  <div className="tableWrap"><table><thead><tr>{isAdmin&&<th className="selectionCell"><input type="checkbox" aria-label="현재 목록 전체 선택" checked={allVisibleSelected} onChange={toggleVisibleSelection}/></th>}{([['first_inbound_date','최초 인입'],['sensitivity','감도'],['db_type','DB유형'],['inbound_content','DB유입메세지'],['name','이름/필명'],['phone','마블링등급'],['telegram_alias','텔레그램 필명'],['owner_name','담당자'],['consultation_count','상담 횟수'],['consultation_content','상담내용']] as [ColumnKey,string][]).map(([key,label])=><ResizableTh key={key} columnKey={key} label={label} wide={key==='inbound_content'||key==='consultation_content'} options={filterOptions(key)} values={columnFilters[key]||[]} open={openFilter===key} onToggle={()=>setOpenFilter(openFilter===key?null:key)} onApply={values=>{setColumnFilter(key,values);setOpenFilter(null)}} onCancel={()=>setOpenFilter(null)}/>)}</tr></thead><tbody>{rows.length?rows.map(c=><tr key={c.id} className="clickable" onClick={()=>setSelectedId(c.id)}>{isAdmin&&<td className="selectionCell" onClick={e=>e.stopPropagation()}><input type="checkbox" aria-label={`${c.name||'고객'} 선택`} checked={selectedCustomerIds.includes(c.id)} onChange={()=>toggleCustomerSelection(c.id)}/></td>}<td>{c.first_inbound_date||'-'}</td><td><span className={'badge '+({상:'high',중:'mid',하:'low',폐:'dead'}[c.sensitivity])}>{c.sensitivity}</span></td><td>{c.db_type||'-'}</td><td className="clipCell">{c.inbound_content||'-'}</td><td><b>{c.name||'-'}</b></td><td>{c.phone||'-'}</td><td>{c.telegram_alias||'-'}</td><td>{c.owner_name||'미배정'}</td><td><b>{c.consultation_history.length}회</b></td><td className="clipCell">{c.consultation_history.at(-1)?.content||'-'}</td></tr>):<tr><td colSpan={isAdmin?11:10} className="noFilterResults">선택한 필터 조합에 해당하는 고객이 없습니다.</td></tr>}</tbody></table></div>
 
   {selected&&!editing&&<CustomerDetail customer={selected} isAdmin={isAdmin} onClose={()=>setSelectedId(null)} onEdit={()=>setEditing({...selected,consultation_history:[...selected.consultation_history]})} onArchive={()=>archiveCustomer(selected.id)} onHardDelete={()=>hardDeleteCustomer(selected.id)} onAdd={addConsultation} onDeleteEntry={deleteConsultation}/>} 
   {editing&&<CustomerForm value={editing} owners={assignableStaff} onCancel={()=>setEditing(null)} onSave={saveCustomer}/>} 
