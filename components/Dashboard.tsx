@@ -306,9 +306,37 @@ useEffect(()=>{
    if(error)throw error;
    const saved=normalizeCustomer(data);
    setCustomers(prev=>prev.map(c=>c.id===customerId?saved:c));
-  }catch(error:any){
+ }catch(error:any){
    console.error(error);
    alert(`메모 저장 실패: ${error?.message||'알 수 없는 오류'}`);
+  }
+ }
+ async function updateConsultation(customerId:string,entryId:string,date:string,content:string){
+  if(!content.trim())return;
+  const customer=customers.find(c=>c.id===customerId);
+  if(!customer)return;
+
+  const history=customer.consultation_history.map(entry=>entry.id===entryId?{...entry,date:date||entry.date,content:content.trim()}:entry);
+
+  try{
+   const {data,error}=await supabase
+    .from('customers')
+    .update({
+     consultation_history:history,
+     consultation_notes:history.map(x=>x.content).join('\n'),
+     updated_at:new Date().toISOString()
+    })
+    .eq('id',customerId)
+    .select('*')
+    .single();
+
+   if(error)throw error;
+   const saved=normalizeCustomer(data);
+   setCustomers(prev=>prev.map(c=>c.id===customerId?saved:c));
+  }catch(error:any){
+   console.error(error);
+   alert(`메모 수정 실패: ${error?.message||'알 수 없는 오류'}`);
+   throw error;
   }
  }
  async function deleteConsultation(customerId:string,entryId:string){
@@ -486,7 +514,7 @@ useEffect(()=>{
   <div className={`mobileCustomerList ${mobileView==='table'?'mobileCardsHidden':''}`}>{rows.length?rows.map(c=><div key={c.id} className="mobileCustomerCard" role="button" tabIndex={0} onClick={()=>setSelectedId(c.id)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelectedId(c.id)}}}><div className="mobileCustomerHead">{canManageTeam&&<input type="checkbox" aria-label={`${c.name||'고객'} 선택`} checked={selectedCustomerIds.includes(c.id)} onClick={e=>e.stopPropagation()} onChange={()=>toggleCustomerSelection(c.id)}/>}<div><b>{c.name||'이름 없음'}</b><span>{c.first_inbound_date||'-'} 인입</span></div><span className={'badge '+({상:'high',중:'mid',하:'low',폐:'dead'}[c.sensitivity])}>{c.sensitivity}</span></div><div className="mobileCustomerGrid"><div><span>마블링등급</span><strong>{c.phone||'-'}</strong></div><div><span>DB유형</span><strong>{c.db_type||'-'}</strong></div><div><span>담당자</span><strong>{c.owner_name||'미배정'}</strong></div><div><span>다음 연락일</span><strong>{c.next_contact_at?.slice(0,10)||'미정'}</strong></div></div><div className="mobileCustomerMemo"><span>최근 상담 · {c.consultation_history.length}회</span><p>{c.consultation_history.at(-1)?.content||'등록된 상담 내용이 없습니다.'}</p></div></div>):<div className="mobileNoResults">선택한 조건에 해당하는 고객이 없습니다.</div>}</div>
   <div className={`tableWrap ${mobileView==='cards'?'mobileTableHidden':''}`}><table><thead><tr>{canManageTeam&&<th className="selectionCell"><input type="checkbox" aria-label="현재 목록 전체 선택" checked={allVisibleSelected} onChange={toggleVisibleSelection}/></th>}{([['first_inbound_date','최초 인입'],['sensitivity','감도'],['db_type','DB유형'],['inbound_content','DB유입메세지'],['name','이름/필명'],['phone','마블링등급'],['telegram_alias','텔레그램 필명'],['owner_name','담당자'],['consultation_count','상담 횟수'],['consultation_content','상담내용']] as [ColumnKey,string][]).map(([key,label])=><ResizableTh key={key} columnKey={key} label={label} wide={key==='inbound_content'||key==='consultation_content'} options={filterOptions(key)} values={columnFilters[key]||[]} open={openFilter===key} sortDirection={sortConfig.key===key?sortConfig.direction:null} onToggle={()=>setOpenFilter(openFilter===key?null:key)} onSort={direction=>{setSortConfig({key,direction});setOpenFilter(null)}} onApply={values=>{setColumnFilter(key,values);setOpenFilter(null)}} onCancel={()=>setOpenFilter(null)}/>)}</tr></thead><tbody>{rows.length?rows.map(c=><tr key={c.id} className="clickable" onClick={()=>setSelectedId(c.id)}>{canManageTeam&&<td className="selectionCell" onClick={e=>e.stopPropagation()}><input type="checkbox" aria-label={`${c.name||'고객'} 선택`} checked={selectedCustomerIds.includes(c.id)} onChange={()=>toggleCustomerSelection(c.id)}/></td>}<td>{c.first_inbound_date||'-'}</td><td><span className={'badge '+({상:'high',중:'mid',하:'low',폐:'dead'}[c.sensitivity])}>{c.sensitivity}</span></td><td>{c.db_type||'-'}</td><td className="clipCell">{c.inbound_content||'-'}</td><td><b>{c.name||'-'}</b></td><td>{c.phone||'-'}</td><td>{c.telegram_alias||'-'}</td><td>{c.owner_name||'미배정'}</td><td><b>{c.consultation_history.length}회</b></td><td className="clipCell">{c.consultation_history.at(-1)?.content||'-'}</td></tr>):<tr><td colSpan={canManageTeam?11:10} className="noFilterResults">선택한 필터 조합에 해당하는 고객이 없습니다.</td></tr>}</tbody></table></div>
 
-  {selected&&!editing&&<CustomerDetail customer={selected} isAdmin={isOwner} canEditCore={canManageTeam} onClose={()=>setSelectedId(null)} onEdit={()=>setEditing({...selected,consultation_history:[...selected.consultation_history]})} onArchive={()=>void archiveCustomer(selected.id)} onHardDelete={()=>hardDeleteCustomer(selected.id)} onAdd={addConsultation} onDeleteEntry={deleteConsultation} onUpdateNextContact={updateNextContact}/>}
+  {selected&&!editing&&<CustomerDetail customer={selected} isAdmin={isOwner} canEditCore={canManageTeam} onClose={()=>setSelectedId(null)} onEdit={()=>setEditing({...selected,consultation_history:[...selected.consultation_history]})} onArchive={()=>void archiveCustomer(selected.id)} onHardDelete={()=>hardDeleteCustomer(selected.id)} onAdd={addConsultation} onUpdateEntry={updateConsultation} onDeleteEntry={deleteConsultation} onUpdateNextContact={updateNextContact}/>}
   {editing&&<CustomerForm value={editing} owners={assignableStaff} onCancel={()=>setEditing(null)} onSave={saveCustomer}/>} 
   {showStaff&&<StaffManager staff={staff} isOwner={isOwner} onChange={setStaff} onClose={()=>setShowStaff(false)}/>}
   {showDue&&<CustomerListModal title="오늘 연락해야 할 고객" subtitle="예정일이 오늘이거나 지난 고객입니다." customers={dueCustomers} onClose={()=>setShowDue(false)} onOpen={id=>{setShowDue(false);setSelectedId(id)}}/>}
@@ -527,8 +555,8 @@ function ResizableTh({columnKey,label,wide=false,options,values,open,sortDirecti
  return <th className={(wide?'wideTh ':'')+(values.length?'filteredTh ':'')+(sortDirection?'sortedTh':'')} style={{width,minWidth:width,maxWidth:width}}><div className="thResize"><button type="button" className="columnFilterButton" onClick={onToggle}>{label}<span>{indicator}</span></button>{open&&<div className="columnFilterMenu" onClick={e=>e.stopPropagation()}><div className="columnFilterTitle"><b>{label} 필터·정렬</b><button type="button" onClick={onCancel}>×</button></div><div className="columnSortTools"><button type="button" className={sortDirection==='asc'?'activeSort':''} onClick={()=>onSort('asc')}>↑ {ascendingLabel}</button><button type="button" className={sortDirection==='desc'?'activeSort':''} onClick={()=>onSort('desc')}>↓ {descendingLabel}</button></div><div className="columnFilterTools"><button type="button" onClick={()=>setDraft(options)}>전체 선택</button><button type="button" onClick={()=>setDraft([])}>전체 해제</button></div><div className="columnFilterOptions">{options.map(option=><label key={`${columnKey}-${option}`}><input type="checkbox" checked={draft.includes(option)} onChange={()=>toggle(option)}/><span>{option}</span></label>)}</div><div className="columnFilterActions"><button type="button" onClick={onCancel}>취소</button><button type="button" className="primary" onClick={()=>onApply(draft)}>적용</button></div></div>}</div><span className="columnResizeHandle" role="separator" aria-label={`${label} 열 너비 조절`} onPointerDown={beginResize}/></th>
 }
 
-function CustomerDetail({customer,isAdmin,canEditCore,onClose,onEdit,onArchive,onHardDelete,onAdd,onDeleteEntry,onUpdateNextContact}:{customer:Customer,isAdmin:boolean,canEditCore:boolean,onClose:()=>void,onEdit:()=>void,onArchive:()=>void,onHardDelete:()=>void,onAdd:(id:string,date:string,content:string,remindIn3Days:boolean)=>void,onDeleteEntry:(id:string,entryId:string)=>void,onUpdateNextContact:(id:string,date:string|null)=>Promise<void>}){
- const [date,setDate]=useState(today());const [content,setContent]=useState('');const [remind,setRemind]=useState(false);const [nextContact,setNextContact]=useState(customer.next_contact_at?.slice(0,10)||'');const [savingContact,setSavingContact]=useState(false);
+function CustomerDetail({customer,isAdmin,canEditCore,onClose,onEdit,onArchive,onHardDelete,onAdd,onUpdateEntry,onDeleteEntry,onUpdateNextContact}:{customer:Customer,isAdmin:boolean,canEditCore:boolean,onClose:()=>void,onEdit:()=>void,onArchive:()=>void,onHardDelete:()=>void,onAdd:(id:string,date:string,content:string,remindIn3Days:boolean)=>void,onUpdateEntry:(id:string,entryId:string,date:string,content:string)=>Promise<void>,onDeleteEntry:(id:string,entryId:string)=>void,onUpdateNextContact:(id:string,date:string|null)=>Promise<void>}){
+ const [date,setDate]=useState(today());const [content,setContent]=useState('');const [remind,setRemind]=useState(false);const [nextContact,setNextContact]=useState(customer.next_contact_at?.slice(0,10)||'');const [savingContact,setSavingContact]=useState(false);const [editingEntryId,setEditingEntryId]=useState<string|null>(null);const [editDate,setEditDate]=useState('');const [editContent,setEditContent]=useState('');const [savingEntry,setSavingEntry]=useState(false);
  useEffect(()=>setNextContact(customer.next_contact_at?.slice(0,10)||''),[customer.next_contact_at]);
  useEffect(()=>{
   const closeOnEscape=(event:KeyboardEvent)=>{if(event.key==='Escape')onClose()};
@@ -543,7 +571,7 @@ function CustomerDetail({customer,isAdmin,canEditCore,onClose,onEdit,onArchive,o
  <div className="addMemo"><input type="date" value={date} onChange={e=>setDate(e.target.value)}/><textarea rows={3} placeholder="새 상담 내용을 입력하세요" value={content} onChange={e=>setContent(e.target.value)}/><button className="primary" onClick={()=>{if(!content.trim())return;onAdd(customer.id,date,content,remind);setContent('');}}>상담 메모 추가</button></div>
  <label className="remindCheck"><input type="checkbox" checked={remind} onChange={e=>setRemind(e.target.checked)}/> 메모 저장 후 3일 뒤 다시 연락 알림</label>
  <div className="nextContactEditor"><label><span>다음 연락일</span><input type="date" value={nextContact} onChange={e=>setNextContact(e.target.value)}/></label><button type="button" disabled={savingContact} onClick={async()=>{setSavingContact(true);try{await onUpdateNextContact(customer.id,nextContact||null)}finally{setSavingContact(false)}}}>{savingContact?'저장 중...':'연락일 저장'}</button></div>
- <div className="timeline">{sorted.length?sorted.map(entry=><div className="timelineRow" key={entry.id}><div className="timelineDate">{fmtConsultationDateTime(entry)}</div><div className="timelineContent">{entry.content}</div><button className="entryDelete" title="상담 기록 삭제" onClick={()=>onDeleteEntry(customer.id,entry.id)}>삭제</button></div>):<div className="empty">등록된 상담 기록이 없습니다.</div>}</div>
+ <div className="timeline">{sorted.length?sorted.map(entry=>{const isEditing=editingEntryId===entry.id;return <div className="timelineRow" key={entry.id}><div className="timelineDate">{fmtConsultationDateTime(entry)}</div>{isEditing?<div className="timelineEdit"><input type="date" value={editDate} onChange={e=>setEditDate(e.target.value)}/><textarea rows={4} value={editContent} onChange={e=>setEditContent(e.target.value)}/></div>:<div className="timelineContent">{entry.content}</div>}<div className="entryActions">{isEditing?<><button className="primary" disabled={savingEntry||!editContent.trim()} onClick={async()=>{setSavingEntry(true);try{await onUpdateEntry(customer.id,entry.id,editDate,editContent);setEditingEntryId(null)}finally{setSavingEntry(false)}}}>{savingEntry?'저장 중...':'저장'}</button><button disabled={savingEntry} onClick={()=>setEditingEntryId(null)}>취소</button></>:<><button className="entryEdit" onClick={()=>{setEditingEntryId(entry.id);setEditDate(entry.date);setEditContent(entry.content)}}>수정</button><button className="entryDelete" title="상담 기록 삭제" onClick={()=>onDeleteEntry(customer.id,entry.id)}>삭제</button></>}</div></div>}):<div className="empty">등록된 상담 기록이 없습니다.</div>}</div>
  <div className="modalActions">{canEditCore&&<button className="warning" onClick={onArchive}>종료 처리</button>}{isAdmin&&<button className="danger" onClick={onHardDelete}>완전 삭제</button>}{canEditCore&&<button className="primary" onClick={onEdit}>정보 수정</button>}</div></div></div>
 }
 function Info({label,value}:{label:string,value:any}){return <div className="info"><span>{label}</span><b>{value||'-'}</b></div>}
