@@ -467,7 +467,7 @@ useEffect(()=>{
 
  return <main className="wrap">
   <div className="top"><div><div className="title">CRM <span className="version">로컬 안정화 v1.1 · 로그인 적용</span></div><div className="roleNotice">현재 사용자: <b>{currentUser.name}</b> · {currentUser.role}{!canManageTeam&&' · 본인 담당 DB만 표시'}</div></div><div className="topActions">
-   {canManageTeam&&<button onClick={()=>setShowStaff(true)}>사용자·관리자 관리</button>}{isOwner&&<button onClick={()=>setShowSecurity(true)}>보안 관리</button>}<button onClick={onLogout}>로그아웃</button>{isOwner&&<button className="primary" onClick={()=>setEditing(blankCustomer())}>+ 신규 고객</button>}
+   {canManageTeam&&<button onClick={()=>setShowStaff(true)}>사용자·관리자 관리</button>}{isOwner&&<button onClick={()=>setShowSecurity(true)}>보안 관리</button>}<button onClick={onLogout}>로그아웃</button>{canManageTeam&&<button className="primary" onClick={()=>setEditing(blankCustomer())}>+ 신규 고객</button>}
   </div></div>
   <section className="kpis"><div className="card kpi">전체 DB 수<strong>{total}</strong></div><div className="card kpi">전일 상담 수<strong>{yesterdayConsulted}</strong></div><div className="card kpi">오늘 상담 수<strong>{todayConsulted}</strong></div><button className="card kpi clickableKpi" onClick={()=>setShowTomorrow(true)}>내일 상담 예약<strong>{tomorrowCustomers.length}</strong><span>목록 보기</span></button></section>
   <div className="dueBanner" onClick={()=>setShowDue(true)}><div><b>오늘 연락해야 할 고객</b><span>예정일이 오늘이거나 지난 고객을 확인합니다.</span></div><strong>{dueCustomers.length}명</strong></div>
@@ -521,7 +521,7 @@ function ResizableTh({columnKey,label,wide=false,options,values,open,sortDirecti
 }
 
 function CustomerDetail({customer,isAdmin,canEditCore,onClose,onEdit,onArchive,onHardDelete,onAdd,onDeleteEntry,onUpdateNextContact}:{customer:Customer,isAdmin:boolean,canEditCore:boolean,onClose:()=>void,onEdit:()=>void,onArchive:()=>void,onHardDelete:()=>void,onAdd:(id:string,date:string,content:string,remindIn3Days:boolean)=>void,onDeleteEntry:(id:string,entryId:string)=>void,onUpdateNextContact:(id:string,date:string|null)=>Promise<void>}){
- const [date,setDate]=useState(today());const [content,setContent]=useState('');const [remind,setRemind]=useState(true);const [nextContact,setNextContact]=useState(customer.next_contact_at?.slice(0,10)||'');const [savingContact,setSavingContact]=useState(false);
+ const [date,setDate]=useState(today());const [content,setContent]=useState('');const [remind,setRemind]=useState(false);const [nextContact,setNextContact]=useState(customer.next_contact_at?.slice(0,10)||'');const [savingContact,setSavingContact]=useState(false);
  useEffect(()=>setNextContact(customer.next_contact_at?.slice(0,10)||''),[customer.next_contact_at]);
  const sorted=[...customer.consultation_history].sort((a,b)=>a.date.localeCompare(b.date)||a.created_at.localeCompare(b.created_at));
  return <div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><div className="modal detail"><div className="modalHead"><div><h2>{customer.name||'이름 없음'}</h2><div className="muted">{customer.phone||'마블링등급 없음'}{customer.telegram_alias?` · 텔레그램 ${customer.telegram_alias}`:''}</div></div><button onClick={onClose}>닫기</button></div>
@@ -564,9 +564,16 @@ function StaffManager({staff,isOwner,onChange,onClose}:{staff:StaffMember[],isOw
   if(!confirm(`${member.name} 계정을 ${nextRole}(으)로 변경할까요?`))return;
   setBusy(true);try{await request('PATCH',{id:member.id,action:'role',role:nextRole==='부관리자(팀장)'?'manager':'agent'});await refresh();alert('계정 권한이 변경되었습니다.');}catch(e:any){alert(e.message)}finally{setBusy(false)}
  }
+ async function deleteAccount(member:StaffMember){
+  if(!isOwner||member.role==='최고관리자')return;
+  if(!confirm(`${member.name} 계정을 완전히 삭제할까요? 이 작업은 되돌릴 수 없습니다.`))return;
+  const typed=prompt(`삭제 확인을 위해 아이디 "${member.username||''}"를 입력하세요.`);
+  if(typed!==(member.username||'')){if(typed!==null)alert('아이디가 일치하지 않아 삭제하지 않았습니다.');return;}
+  setBusy(true);try{await request('DELETE',{id:member.id});await refresh();alert('계정이 완전히 삭제되었습니다.');}catch(e:any){alert(e.message)}finally{setBusy(false)}
+ }
  return <div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><div className="modal staffModal"><div className="modalHead"><div><h2>사용자·관리자 관리</h2><div className="muted">Supabase Auth에 실제 로그인 계정을 생성합니다.</div></div><button onClick={onClose}>닫기</button></div>
  <div className="staffAdd staffAddAuth"><input placeholder="이름" value={name} onChange={e=>setName(e.target.value)}/><input placeholder="로그인 아이디" value={username} onChange={e=>setUsername(e.target.value)}/><input type="password" placeholder="비밀번호 8자 이상" value={password} onChange={e=>setPassword(e.target.value)}/><select value={role} onChange={e=>setRole(e.target.value as StaffRole)}>{roles.filter(x=>x==='일반담당자'||(isOwner&&x==='부관리자(팀장)')).map(x=><option key={x}>{x}</option>)}</select><button className="primary" disabled={busy} onClick={()=>void add()}>{busy?'처리 중...':'계정 추가'}</button></div>
- <div className="ownerList">{staff.map(member=><div className="ownerRow" key={member.id}><div><b>{member.name}</b><span className="staffRole">아이디: {member.username||'미설정'} · {member.role}{!member.active?' · 비활성':''}</span></div><div className="accountActions">{isOwner&&member.role!=='최고관리자'&&<button disabled={busy} onClick={()=>void changeRole(member)}>{member.role==='일반담당자'?'팀장으로 승격':'일반담당자로 변경'}</button>}{member.active&&(isOwner||member.role==='일반담당자')&&<button disabled={busy} onClick={()=>void resetPassword(member.id)}>비밀번호 변경</button>}{member.role!=='최고관리자'&&(isOwner||member.role==='일반담당자')&&(member.active?<button disabled={busy} className="entryDelete" onClick={()=>void remove(member.id)}>비활성화</button>:<button disabled={busy} onClick={()=>void activate(member.id)}>활성화</button>)}</div></div>)}</div>
+ <div className="ownerList">{staff.map(member=><div className="ownerRow" key={member.id}><div><b>{member.name}</b><span className="staffRole">아이디: {member.username||'미설정'} · {member.role}{!member.active?' · 비활성':''}</span></div><div className="accountActions">{isOwner&&member.role!=='최고관리자'&&<button disabled={busy} onClick={()=>void changeRole(member)}>{member.role==='일반담당자'?'팀장으로 승격':'일반담당자로 변경'}</button>}{member.active&&(isOwner||member.role==='일반담당자')&&<button disabled={busy} onClick={()=>void resetPassword(member.id)}>비밀번호 변경</button>}{member.role!=='최고관리자'&&(isOwner||member.role==='일반담당자')&&(member.active?<button disabled={busy} className="entryDelete" onClick={()=>void remove(member.id)}>비활성화</button>:<button disabled={busy} onClick={()=>void activate(member.id)}>활성화</button>)}{isOwner&&member.role!=='최고관리자'&&<button disabled={busy} className="entryDelete" onClick={()=>void deleteAccount(member)}>계정 삭제</button>}</div></div>)}</div>
  <div className="notice">비밀번호는 Supabase Auth가 안전하게 관리하며 화면이나 데이터베이스에 원문으로 저장하지 않습니다.</div>
  </div></div>
 }

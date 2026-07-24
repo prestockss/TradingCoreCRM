@@ -107,3 +107,36 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: error?.message ?? '계정 수정 실패' }, { status: 400 });
   }
 }
+
+export async function DELETE(request: Request) {
+  const auth = await authorize(request);
+  if (!auth?.isOwner) return NextResponse.json({ error: '계정 삭제는 최고관리자만 할 수 있습니다.' }, { status: 403 });
+  try {
+    const body = await request.json();
+    const id = String(body.id ?? '');
+    if (!id) throw new Error('계정 ID가 없습니다.');
+    if (id === auth.user.id) throw new Error('현재 로그인한 대표계정은 삭제할 수 없습니다.');
+
+    const { data: target, error: targetError } = await auth.admin
+      .from('profiles')
+      .select('role, login_id, display_name')
+      .eq('id', id)
+      .maybeSingle();
+    if (targetError) throw targetError;
+    if (!target) throw new Error('대상 계정을 찾을 수 없습니다.');
+    if (target.login_id === 'prestockss' || target.role === 'owner') throw new Error('대표계정은 삭제할 수 없습니다.');
+
+    const { count: assignedCount, error: assignedError } = await auth.admin
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('owner_name', target.display_name);
+    if (assignedError) throw assignedError;
+    if ((assignedCount ?? 0) > 0) throw new Error(`담당 고객 ${assignedCount}명이 남아 있습니다. 다른 담당자에게 재배정한 뒤 삭제해 주세요.`);
+
+    const { error } = await auth.admin.auth.admin.deleteUser(id);
+    if (error) throw new Error('계정 사용 기록이 남아 있어 삭제할 수 없습니다. 필요한 경우 비활성화를 사용해 주세요.');
+    return NextResponse.json({ ok: true });
+  } catch (error: any) {
+    return NextResponse.json({ error: error?.message ?? '계정 삭제 실패' }, { status: 400 });
+  }
+}
