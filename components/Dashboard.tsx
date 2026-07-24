@@ -52,6 +52,13 @@ function normalizeCustomer(raw:any):Customer{
 }
 function blankCustomer():Customer{return normalizeCustomer({id:uid(),first_inbound_date:today(),sensitivity:'중',db_type:'개인텔',inbound_content:'',name:'',phone:'',telegram_alias:'',telegram_joined:false,exchange_joined:false,exchange_name:'',deposited:false,consultation_notes:'',consultation_history:[],stage:'신규',owner_name:'',next_contact_at:null,updated_at:new Date().toISOString()});}
 function fmtDate(value:string){if(!value)return '-';const d=new Date(value+'T00:00:00');if(Number.isNaN(d.getTime()))return value;return `${d.getMonth()+1}/${d.getDate()}`}
+const consultationTimeFormatter=new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Asia/Seoul'});
+function fmtConsultationDateTime(entry:ConsultationEntry){
+ const [,month='',day='']=dateOnly(entry.date).split('-');
+ const dateLabel=month&&day?`${month.padStart(2,'0')}/${day.padStart(2,'0')}`:fmtDate(entry.date);
+ const savedAt=new Date(entry.created_at);
+ return Number.isNaN(savedAt.getTime())?dateLabel:`${dateLabel} ${consultationTimeFormatter.format(savedAt)}`;
+}
 
 const defaultStaff:StaffMember[]=[];
 function mapRole(role:string):StaffRole{return role==='owner'?'최고관리자':(['admin','manager'].includes(role)?'부관리자(팀장)':'일반담당자')}
@@ -523,7 +530,12 @@ function ResizableTh({columnKey,label,wide=false,options,values,open,sortDirecti
 function CustomerDetail({customer,isAdmin,canEditCore,onClose,onEdit,onArchive,onHardDelete,onAdd,onDeleteEntry,onUpdateNextContact}:{customer:Customer,isAdmin:boolean,canEditCore:boolean,onClose:()=>void,onEdit:()=>void,onArchive:()=>void,onHardDelete:()=>void,onAdd:(id:string,date:string,content:string,remindIn3Days:boolean)=>void,onDeleteEntry:(id:string,entryId:string)=>void,onUpdateNextContact:(id:string,date:string|null)=>Promise<void>}){
  const [date,setDate]=useState(today());const [content,setContent]=useState('');const [remind,setRemind]=useState(false);const [nextContact,setNextContact]=useState(customer.next_contact_at?.slice(0,10)||'');const [savingContact,setSavingContact]=useState(false);
  useEffect(()=>setNextContact(customer.next_contact_at?.slice(0,10)||''),[customer.next_contact_at]);
- const sorted=[...customer.consultation_history].sort((a,b)=>a.date.localeCompare(b.date)||a.created_at.localeCompare(b.created_at));
+ useEffect(()=>{
+  const closeOnEscape=(event:KeyboardEvent)=>{if(event.key==='Escape')onClose()};
+  window.addEventListener('keydown',closeOnEscape);
+  return()=>window.removeEventListener('keydown',closeOnEscape);
+ },[onClose]);
+ const sorted=[...customer.consultation_history].sort((a,b)=>b.date.localeCompare(a.date)||b.created_at.localeCompare(a.created_at));
  return <div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><div className="modal detail"><div className="modalHead"><div><h2>{customer.name||'이름 없음'}</h2><div className="muted">{customer.phone||'마블링등급 없음'}{customer.telegram_alias?` · 텔레그램 ${customer.telegram_alias}`:''}</div></div><button onClick={onClose}>닫기</button></div>
  <div className="detailGrid"><Info label="감도" value={customer.sensitivity}/><Info label="DB유형" value={customer.db_type}/><Info label="최초 인입" value={customer.first_inbound_date}/><Info label="담당자" value={customer.owner_name||'미배정'}/><Info label="텔레그램" value={customer.telegram_joined?'입장':'미입장'}/><Info label="가입" value={customer.exchange_joined?'완료':'미가입'}/><Info label="입금" value={customer.deposited?'완료':'미입금'}/><Info label="상담 횟수" value={`${customer.consultation_history.length}회`}/><Info label="다음 연락일" value={dateOnly(customer.next_contact_at)||'미정'}/><Info label="상태" value={customer.stage}/></div>
  <h3>DB유입메세지</h3><div className="noteBox pre">{customer.inbound_content||'-'}</div>
@@ -531,7 +543,7 @@ function CustomerDetail({customer,isAdmin,canEditCore,onClose,onEdit,onArchive,o
  <div className="addMemo"><input type="date" value={date} onChange={e=>setDate(e.target.value)}/><textarea rows={3} placeholder="새 상담 내용을 입력하세요" value={content} onChange={e=>setContent(e.target.value)}/><button className="primary" onClick={()=>{if(!content.trim())return;onAdd(customer.id,date,content,remind);setContent('');}}>상담 메모 추가</button></div>
  <label className="remindCheck"><input type="checkbox" checked={remind} onChange={e=>setRemind(e.target.checked)}/> 메모 저장 후 3일 뒤 다시 연락 알림</label>
  <div className="nextContactEditor"><label><span>다음 연락일</span><input type="date" value={nextContact} onChange={e=>setNextContact(e.target.value)}/></label><button type="button" disabled={savingContact} onClick={async()=>{setSavingContact(true);try{await onUpdateNextContact(customer.id,nextContact||null)}finally{setSavingContact(false)}}}>{savingContact?'저장 중...':'연락일 저장'}</button></div>
- <div className="timeline">{sorted.length?sorted.map(entry=><div className="timelineRow" key={entry.id}><div className="timelineDate">{fmtDate(entry.date)}</div><div className="timelineContent">{entry.content}</div><button className="entryDelete" title="상담 기록 삭제" onClick={()=>onDeleteEntry(customer.id,entry.id)}>삭제</button></div>):<div className="empty">등록된 상담 기록이 없습니다.</div>}</div>
+ <div className="timeline">{sorted.length?sorted.map(entry=><div className="timelineRow" key={entry.id}><div className="timelineDate">{fmtConsultationDateTime(entry)}</div><div className="timelineContent">{entry.content}</div><button className="entryDelete" title="상담 기록 삭제" onClick={()=>onDeleteEntry(customer.id,entry.id)}>삭제</button></div>):<div className="empty">등록된 상담 기록이 없습니다.</div>}</div>
  <div className="modalActions">{canEditCore&&<button className="warning" onClick={onArchive}>종료 처리</button>}{isAdmin&&<button className="danger" onClick={onHardDelete}>완전 삭제</button>}{canEditCore&&<button className="primary" onClick={onEdit}>정보 수정</button>}</div></div></div>
 }
 function Info({label,value}:{label:string,value:any}){return <div className="info"><span>{label}</span><b>{value||'-'}</b></div>}
