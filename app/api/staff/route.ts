@@ -92,6 +92,13 @@ export async function PATCH(request: Request) {
       if (target.login_id === 'prestockss' || target.role === 'owner') throw new Error('대표계정은 비활성화할 수 없습니다.');
       const { error } = await auth.admin.from('profiles').update({ active }).eq('id', id);
       if (error) throw error;
+    } else if (body.action === 'role') {
+      if (!auth.isOwner) throw new Error('계정 권한은 최고관리자만 변경할 수 있습니다.');
+      if (target.login_id === 'prestockss' || target.role === 'owner') throw new Error('대표계정의 권한은 변경할 수 없습니다.');
+      const role: DbRole | null = body.role === 'manager' ? 'manager' : body.role === 'agent' ? 'agent' : null;
+      if (!role) throw new Error('변경할 권한이 올바르지 않습니다.');
+      const { error } = await auth.admin.from('profiles').update({ role }).eq('id', id);
+      if (error) throw error;
     } else {
       throw new Error('지원하지 않는 작업입니다.');
     }
